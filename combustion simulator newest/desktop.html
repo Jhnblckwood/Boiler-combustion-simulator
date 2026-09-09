@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Boiler Combustion Simulator</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;400;700;900&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="sim.css" />
+<style>
+  /* ── Desktop layout: sticky header, range sliders ── */
+  #header { position: sticky; top: 0; z-index: 50; }
+
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 8px; border-radius: 4px; outline: none; cursor: pointer; }
+  input[type=range]:disabled { cursor: not-allowed; opacity: 0.4; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #38bdf8; border: 2px solid #0f172a; cursor: pointer; box-shadow: 0 0 10px #38bdf880; transition: transform 0.15s; }
+  input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+  input[type=range]:disabled::-webkit-slider-thumb { background: #475569; cursor: not-allowed; box-shadow: none; }
+  input[type=range].gas::-webkit-slider-thumb  { background: #fb923c; box-shadow: 0 0 10px #fb923c80; }
+  input[type=range].air::-webkit-slider-thumb  { background: #38bdf8; box-shadow: 0 0 10px #38bdf880; }
+  input[type=range].vfd::-webkit-slider-thumb  { background: #22d3ee; box-shadow: 0 0 10px #22d3ee80; }
+  input[type=range].fgr::-webkit-slider-thumb  { background: #a78bfa; box-shadow: 0 0 10px #a78bfa80; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div id="header">
+  <div class="header-inner">
+    <div class="header-top">
+      <div>
+        <div class="header-subtitle">Cleaver-Brooks CBEX-2D &nbsp;·&nbsp; <span style="color:#fbbf24;letter-spacing:0.12em;">Hawk ICS Parallel Positioning</span> &nbsp;·&nbsp; 30 ppm NOₓ</div>
+        <h1>Boiler Combustion Simulator</h1>
+      </div>
+      <div style="display:flex;gap:10px;align-items:flex-start;">
+        <div class="skill-toggle">
+          <div class="skill-toggle-label">Skill Mode</div>
+          <div class="skill-toggle-btns">
+            <button id="btnBeginner" class="skill-btn beginner active">BEGINNER</button>
+            <button id="btnAdvanced" class="skill-btn advanced">ADVANCED</button>
+          </div>
+        </div>
+        <div class="saved-count">
+          <div class="saved-label">Saved</div>
+          <div id="savedCountNum">0<span>/11</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="progress-dots" id="progressDots"></div>
+    <div class="progress-labels">
+      <span>LOW FIRE</span><span>50%</span><span>100%</span>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div id="main">
+  <div class="grid">
+
+    <!-- LEFT -->
+    <div>
+      <!-- Point header -->
+      <div class="card" id="pointCard">
+        <div class="point-header">
+          <div>
+            <div class="point-meta-label" id="pointMetaLabel">Low Fire Point</div>
+            <div class="point-name" id="pointName">Low Fire</div>
+          </div>
+          <div class="firing-box">
+            <div class="firing-label">Firing Rate</div>
+            <div class="firing-val"><span id="firingPct">0</span><span class="unit">%</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tune Mode Toggle -->
+      <div class="tune-toggle" id="tuneModeToggle">
+        <button class="tune-toggle-btn rough active" id="btnRoughMode">⬆ ROUGH TUNE</button>
+        <button class="tune-toggle-btn fine" id="btnFineMode">⬇ FINE TUNE</button>
+      </div>
+      <div class="fine-hint" id="fineHint" style="display:none"></div>
+
+      <!-- Controls -->
+      <div class="card">
+
+        <!-- Gas Valve -->
+        <div class="slider-wrap">
+          <div class="slider-header">
+            <span class="slider-label">Gas Valve</span>
+            <span class="slider-val gas" id="gasVal">3.0<span>%</span></span>
+          </div>
+          <input type="range" id="gasSlider" class="gas" min="0" max="100" step="0.2" value="3" />
+        </div>
+
+        <!-- Air Damper -->
+        <div class="slider-wrap">
+          <div class="slider-header">
+            <span class="slider-label">Air Damper</span>
+            <span class="slider-val air" id="airVal">10.0<span>%</span></span>
+          </div>
+          <input type="range" id="airSlider" class="air" min="0" max="100" step="0.2" value="10" />
+        </div>
+
+        <!-- VFD Blower: 0-60 Hz, 60 Hz = motor rated speed -->
+        <div class="slider-wrap">
+          <div class="slider-header">
+            <span class="slider-label">VFD Blower</span>
+            <span class="slider-val vfd" id="vfdVal">70.0<span>%</span></span>
+          </div>
+          <input type="range" id="vfdSlider" class="vfd" min="0" max="60" step="0.2" value="42" />
+          <div class="vfd-sub"><span id="vfdHz">42.0</span> Hz</div>
+        </div>
+
+        <!-- FGR Damper -->
+        <div class="slider-wrap">
+          <div class="slider-header">
+            <span class="slider-label">FGR Damper</span>
+            <span class="slider-val fgr" id="fgrVal">0.0<span>%</span></span>
+          </div>
+          <input type="range" id="fgrSlider" class="fgr" min="0" max="100" step="0.2" value="0" />
+        </div>
+
+      </div>
+
+      <!-- Gas Flow Meter -->
+      <div class="card" id="flowCard">
+        <div class="sim-header tight">
+          <span class="sim-title">Gas Flow Meter</span>
+          <span class="sim-sub">CBEX-2D · Butterfly Valve</span>
+        </div>
+        <div class="flow-top">
+          <div>
+            <div class="flow-label">Gas Flow</div>
+            <div class="flow-cfh" id="cfhDisplay">0 <span>CFH</span></div>
+          </div>
+          <div style="text-align:right;">
+            <div class="flow-label">Input Rate</div>
+            <div class="flow-mmbtu" id="mmbtuDisplay">0.000 <span>MMBTU/hr</span></div>
+          </div>
+        </div>
+        <div class="gauge-wrap">
+          <div class="gauge-header">
+            <span>Input BTU/hr</span>
+            <span class="gauge-val" id="btuInVal" style="color:#fb923c">0</span>
+          </div>
+          <div class="gauge-track marked">
+            <div class="gauge-fill" id="btuInBar" style="width:0%;background:#fb923c"></div>
+            <div class="gauge-marker" style="left:10%" title="Min Fire"></div>
+            <div class="gauge-marker" style="left:100%;transform:translateX(-2px)" title="Max Fire"></div>
+          </div>
+          <div class="flow-scale">
+            <span>0</span>
+            <span class="limit heat-output-size">MIN 1.43M</span>
+            <span class="limit heat-output-size">MAX 14.29M</span>
+          </div>
+        </div>
+        <div class="heat-row">
+          <div>
+            <div class="heat-label">Heat Output</div>
+            <div class="heat-val glow heat-output-size" id="btuOutDisplay">0.000 <span class="unit">MMBTU/hr</span></div>
+          </div>
+          <div style="text-align:right;">
+            <div class="heat-label">Efficiency</div>
+            <div class="heat-val heat-output-size" id="btuOutEffDisplay">—</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Validation -->
+      <div class="validation-box" id="validationBox" style="display:none"></div>
+
+      <!-- Save / Next -->
+      <div class="btn-row">
+        <button class="btn btn-save" id="btnSave">SAVE POINT</button>
+        <button class="btn btn-next" id="btnNext" disabled>NEXT →</button>
+      </div>
+
+      <!-- Back / Export -->
+      <div class="btn-row2">
+        <button class="btn-back" id="btnBack" style="display:none">← BACK</button>
+        <button class="btn-export" id="btnExport" style="display:none">EXPORT L5X</button>
+      </div>
+    </div>
+
+    <!-- RIGHT -->
+    <div>
+      <!-- Live sim -->
+      <div class="card" id="simCard">
+        <div class="sim-header">
+          <div>
+            <span class="sim-title">Live Simulation</span>
+            <div class="lag-display" id="lagDisplay"></div>
+          </div>
+          <span class="flame-badge flame-stable" id="flameBadge">● FLAME STABLE</span>
+        </div>
+        <div class="gauge-wrap">
+          <div class="gauge-header"><span>O₂</span><span class="gauge-val" id="o2Val" style="color:#4ade80">—</span></div>
+          <div class="gauge-track"><div class="gauge-fill" id="o2Bar" style="width:0%;background:#4ade80"></div></div>
+        </div>
+        <div class="gauge-wrap">
+          <div class="gauge-header"><span>CO₂</span><span class="gauge-val" id="co2Val" style="color:#60a5fa">—</span></div>
+          <div class="gauge-track"><div class="gauge-fill" id="co2Bar" style="width:0%;background:#60a5fa"></div></div>
+        </div>
+        <div class="gauge-wrap">
+          <div class="gauge-header"><span>CO</span><span class="gauge-val" id="coVal" style="color:#4ade80">—</span></div>
+          <div class="gauge-track"><div class="gauge-fill" id="coBar" style="width:0%;background:#4ade80"></div></div>
+        </div>
+        <div class="gauge-wrap">
+          <div class="gauge-header"><span>NOₓ</span><span class="gauge-val" id="noxVal" style="color:#4ade80">—</span></div>
+          <div class="gauge-track"><div class="gauge-fill" id="noxBar" style="width:0%;background:#4ade80"></div></div>
+        </div>
+        <div class="gauge-wrap">
+          <div class="gauge-header"><span>Efficiency</span><span class="gauge-val" id="effVal" style="color:#4ade80">—</span></div>
+          <div class="gauge-track"><div class="gauge-fill" id="effBar" style="width:0%;background:#4ade80"></div></div>
+        </div>
+        <div class="hint-box" id="coHint" style="display:none"></div>
+        <div class="hint-box" id="noxTarget" style="display:none"></div>
+        <div class="stat-grid">
+          <div class="stat-box"><div class="stat-label">Excess Air</div><div class="stat-val" id="eaVal">—</div></div>
+          <div class="stat-box"><div class="stat-label">Lambda (λ)</div><div class="stat-val" id="lambdaVal">—</div></div>
+          <div class="stat-box"><div class="stat-label">Stack Temp</div><div class="stat-val stack" id="stackTempVal">—</div></div>
+        </div>
+      </div>
+
+      <!-- Curve table -->
+      <div class="table-card">
+        <div class="table-title">Saved Curve Table</div>
+        <table>
+          <thead>
+            <tr>
+              <th style="text-align:left">PT</th>
+              <th>GAS%</th><th>AIR%</th><th>VFD%</th><th>FGR%</th>
+              <th>O2%</th><th>CO₂%</th><th>CO</th><th>NOx</th><th>STK°F</th>
+            </tr>
+          </thead>
+          <tbody id="curveTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- FLAMEOUT OVERLAY -->
+<div id="flameoutOverlay">
+  <div class="flameout-box">
+    <div class="flameout-icon">🔥</div>
+    <div class="flameout-title">FLAMEOUT</div>
+    <div class="flameout-sub">CB NOx 30 ppm — Burner Lockout</div>
+    <div id="flameoutReason"></div>
+    <div class="flameout-note">All tuning points cleared. Return to low fire procedure.</div>
+    <button id="btnRelight">🔆 RELIGHT</button>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<div class="footer">
+  <div class="footer-inner">
+    <div class="footer-title">Boiler Combustion Simulator</div>
+    <div class="footer-credits">
+      Created &amp; Designed by <span class="name">John Rohlfing Jr.</span><br/>
+      With huge contribution by <span class="name">Chris Justiano</span> &amp; <span class="name">Don Freeman</span>
+    </div>
+  </div>
+</div>
+<div class="switch-link"><a href="mobile.html">Open Mobile Version</a></div>
+
+<script src="sim.js"></script>
+<script>
+if (typeof startSim !== 'function') {
+  document.body.insertAdjacentHTML('afterbegin',
+    '<div style="background:#7f1d1d;color:#fecaca;padding:14px 20px;font:14px/1.5 monospace;">' +
+    'sim.js / sim.css were not found next to this page. Keep desktop.html, mobile.html, sim.js and sim.css ' +
+    'together in the same folder and open the page from there.</div>');
+  throw new Error('sim.js not loaded');
+}
+// ─── DESKTOP CONTROLS: range sliders ────────────────────────────────────────
+const SLIDER_COLOR = { gas: '#fb923c', air: '#38bdf8', vfd: '#22d3ee', fgr: '#a78bfa' };
+const sliders = {};
+
+function setSliderGradient(input, val, max, color) {
+  const pct = val / max * 100;
+  input.style.background =
+    `linear-gradient(to right, ${color} 0%, ${color} ${pct}%, #1e293b ${pct}%, #1e293b 100%)`;
+}
+
+for (const field of Object.keys(SLIDER_COLOR)) {
+  const input = document.getElementById(field + 'Slider');
+  sliders[field] = input;
+  input.addEventListener('input', e => setControl(field, parseFloat(e.target.value)));
+}
+
+startSim({
+  renderControls(pt) {
+    for (const field of Object.keys(SLIDER_COLOR)) {
+      sliders[field].value = pt[field];
+      setSliderGradient(sliders[field], pt[field], CONTROL_MAX[field], SLIDER_COLOR[field]);
+    }
+  },
+});
+</script>
+</body>
+</html>
