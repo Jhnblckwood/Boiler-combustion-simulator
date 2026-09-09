@@ -7,4 +7,4 @@ Gross output 11,716,000 btu/hr
 
 **index.html will auto direct to phone/pc version**
 
-**Newest version:** [`combustion simulator newest/`](combustion%20simulator%20newest/) — shared engine (`sim.js` + `sim.css`) with desktop and mobile layouts. Keep the files in that folder together.
+**Newest version:** [`combustion simulator newest/index.html`](combustion%20simulator%20newest/index.html) — one self-contained file that picks the phone or PC layout itself. Send just that file.
