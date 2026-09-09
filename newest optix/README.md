@@ -95,7 +95,7 @@ the window is sized to fit.
 |---|---|
 | Windows 10/11 PC | Optix Studio is Windows-only |
 | **FactoryTalk Optix Studio** (version 1.4 or newer) | Free from the Rockwell FactoryTalk Hub — create a free account at <https://hub.factorytalk.com>, then install Optix Studio via the FactoryTalk Hub / download page |
-| This repository | `main` branch (this project lives at `optix/newest optix/`) |
+| This repository | `main` branch (this project lives at `newest optix/`) |
 
 No PLC, no license dongle, and no separate .NET install are needed — the
 built-in emulator runs everything and Studio builds the C# logic itself.
@@ -114,13 +114,13 @@ the default `main` branch — no branch picking needed) and extract it. Keep the
 folder structure intact — the project is everything under:
 
 ```
-optix/newest optix/
+newest optix/
 ```
 
 ### 3. Open the project in Optix Studio
 
 1. Start **FactoryTalk Optix Studio**.
-2. **Open project** → browse into `optix/newest optix/` and pick
+2. **Open project** → browse into `newest optix/` and pick
    **`ValveProvingNewest.optix`** (or just double-click that file).
 3. First open takes a minute: Studio indexes the model and restores the C#
    solution under `ProjectFiles/NetSolution/` (it regenerates `bin/`, `obj/`
