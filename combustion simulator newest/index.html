@@ -89,6 +89,7 @@ h1 {
 /* ── Cards ── */
 .card { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 16px 20px; margin-bottom: 12px; }
 .card.unstable { border-color: #7f1d1d; }
+.card.warn { border-color: #854d0e; }
 .point-header { display: flex; justify-content: space-between; align-items: center; }
 .point-meta-label { font-size: 11px; color: #cbd5e1; letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 2px; font-weight: 600; }
 .point-name { font-size: 28px; font-weight: 900; font-family: 'Exo 2', sans-serif; color: #38bdf8; line-height: 1; }
@@ -147,6 +148,7 @@ h1 {
 .flame-badge { font-size: 10px; font-weight: 700; padding: 3px 10px; border-radius: 20px; letter-spacing: 0.1em; }
 .flame-stable { background: #14532d; color: #4ade80; }
 .flame-unstable { background: #7f1d1d; color: #f87171; }
+.flame-warn { background: #3b2a05; color: #fbbf24; }
 .hint-box { font-size: 10px; border: 1px solid; border-radius: 6px; padding: 7px 10px; letter-spacing: 0.03em; }
 #coHint { color: #fbbf24; background: #292100; border-color: #854d0e; margin-top: 10px; }
 #noxTarget { margin-top: 8px; }
@@ -307,6 +309,7 @@ tr:not(.cur-row) { border-left: 2px solid transparent; }
     padding: 4px 2px; border-radius: 6px; text-align: center; line-height: 1.2;
   }
   .live-flame.unstable { background: #7f1d1d; color: #f87171; border-color: #dc2626; }
+  .live-flame.warn { background: #3b2a05; color: #fbbf24; border-color: #854d0e; }
 </style>
 </head>
 <body>
@@ -676,9 +679,11 @@ const NUM_POINTS = POINTS.length;
 const LAST_IDX   = NUM_POINTS - 1;
 
 // ─── FLAME STABILITY TIMING ─────────────────────────────────────────────────
-// instabilityTicks counts consecutive render() calls with an unstable flame.
-const IMMINENT_TICKS = 4;   // badge switches from UNSTABLE to FLAMEOUT IMMINENT
-const FLAMEOUT_TICKS = 8;   // burner locks out
+// Three states: STABLE → FLAME UNSTABLE (warning band, no countdown) →
+// FLAMEOUT IMMINENT (a trip limit is crossed; countdown runs) → lockout.
+// instabilityTicks advances only on the 250 ms analyzer timer, so the
+// countdown is wall-clock time (2 s) regardless of how fast the controls move.
+const FLAMEOUT_TICKS = 8;   // 8 × 250 ms = 2 s flame-failure response
 
 // ─── ANALYZER LAG ────────────────────────────────────────────────────────────
 // Real flue gas analyzers respond slowly due to sample transport and cell response.
@@ -693,6 +698,8 @@ const ALPHA_O2  = Math.min(1, LAG_DT / TAU_O2);
 const ALPHA_CO2 = Math.min(1, LAG_DT / TAU_CO2);
 const ALPHA_CO  = Math.min(1, LAG_DT / TAU_CO);
 const ALPHA_NOX = Math.min(1, LAG_DT / TAU_NOX);
+const TAU_STACK = 60.0;   // stack thermocouple + breeching thermal mass T63 ≈ 60s
+const ALPHA_STACK = Math.min(1, LAG_DT / TAU_STACK);
 
 // ─── VALIDATION TARGETS ─────────────────────────────────────────────────────
 // Fine-tune O2 targets per firing range (tight high-fire, relaxed light-off)
@@ -713,10 +720,14 @@ const FINE_O2_TARGETS = [
 // ─── VALVE / DAMPER CHARACTERISTICS ─────────────────────────────────────────
 // CB gas butterfly valve: highly nonlinear, most flow change in mid-range.
 // Calibrated so 3% valve ≈ 10% flow (min fire) and 100% valve = 100% flow.
+// Below 0.5% the curve tapers smoothly to zero (a closing valve leaks a
+// trickle, it does not snap shut) — no cliff between 0.5% and 0.4%.
 function butterflyFlow(valvePct) {
   const x = Math.max(0, valvePct / 100);
-  if (x < 0.005) return 0;
-  return Math.min(1.0, Math.pow(Math.sin(x * Math.PI / 2), 0.65));
+  if (x <= 0) return 0;
+  let f = Math.min(1.0, Math.pow(Math.sin(x * Math.PI / 2), 0.65));
+  if (x < 0.005) f *= Math.pow(x / 0.005, 2);
+  return f;
 }
 
 // CB butterfly / opposed-blade air damper: quick-opening characteristic.
@@ -754,7 +765,10 @@ function calcCombustion(gas, air, vfd_hz, fgr, mode) {
 
   const fgrFrac = fgrAct / 100;
 
-  if (gasAct < 0.5) return { o2:0, co:0, co2:0, nox:0, eff:0, ea:0, stable:false, lambda:0, coReason:'', airEff:0, vfdSpd:0, btuInput:0, cfh:0, mmbtuIn:0, flowFrac:0, btuOutput:0, stackTemp:0 };
+  // Fuel availability: as the valve closes the last fraction of a percent,
+  // combustion products fade with the fuel. 1.0 above 2% flow, 0 at no flow.
+  const fuelAvail = Math.min(1, flowFrac / 0.02);
+  const noFire    = flowFrac < 0.002;   // effectively no fuel — stack is purge air
 
   const airNorm = K * Math.pow(Math.max(airEff, 0.1) / 100, Pa);
 
@@ -764,7 +778,11 @@ function calcCombustion(gas, air, vfd_hz, fgr, mode) {
   // 1 - 0.20×0.72 = 0.856 → O2 drops ~1.5-2.0 points; operator must add air.
   const fgrDilution = 1 - fgrFrac * 0.72;
   const effAir  = airNorm * fgrDilution;
-  const lambda  = Math.max(0.40, Math.min(7.0, effAir / Math.max(flowFrac, 0.001)));
+  // lambdaRaw drives O2 (so a starved flame reads toward 20.9% ambient);
+  // lambda is clamped for the CO / NOx correlations, which are only
+  // calibrated between 0.4 and 7.
+  const lambdaRaw = effAir / Math.max(flowFrac, 1e-6);
+  const lambda    = Math.max(0.40, Math.min(7.0, lambdaRaw));
 
   // ── Hot-boiler adjustments (fine-tune mode) ──────────────────────────────
   // Heat-soaked furnace: better combustion, O2 reads 0.3-0.5% lower,
@@ -774,8 +792,8 @@ function calcCombustion(gas, air, vfd_hz, fgr, mode) {
   const furnaceTempK  = isHot ? 1.08 : 1.0;  // 8% NOx increase from hot refractory
   const coSensitivity = isHot ? 1.15 : 1.0;  // CO rises faster near stoichiometric when hot
 
-  const rawO2 = lambda >= 1.0 ? Math.min(20.9, 20.9 * (lambda - 1) / lambda) : 0;
-  const o2 = Math.max(0, rawO2 - heatSoakO2);
+  const rawO2 = lambdaRaw >= 1.0 ? Math.min(20.9, 20.9 * (lambdaRaw - 1) / lambdaRaw) : 0;
+  const o2 = noFire ? 20.9 : Math.max(0, rawO2 - heatSoakO2);
   const ea = Math.max(0, (lambda - 1) * 100);
 
   // ── CO — computed BEFORE stability so CO informs flame state ─────────────
@@ -833,6 +851,20 @@ function calcCombustion(gas, air, vfd_hz, fgr, mode) {
   const stable        = !tooRich && !tooLean && !fgrQuench && !fgrAtLightOff
                       && !highCO && !lowO2;
 
+  // ── Early warning band — flame is lit but visibly degrading ──────────────
+  // Sits just inside each trip limit. A real flame at 17% O2 with CO climbing
+  // is not "stable"; the scanner signal is already getting ragged. Nothing
+  // counts down here — the operator has time to correct. Cross a trip limit
+  // above and the flameout countdown starts.
+  const nearRich    = lambda < 1.0;                          // at / below stoichiometric
+  const nearLean    = lambda > 3.8;                          // O2 above ~15.4%
+  const nearQuench  = fgrFrac > 0.25;
+  const nearFgrLO   = flowFrac < 0.25 && fgrFrac > 0.06;
+  const risingCO    = coCombustion > 150;
+  const nearLowO2   = o2 < 1.0 && gasAct > 8;
+  const marginal    = stable && (nearRich || nearLean || nearQuench
+                      || nearFgrLO || risingCO || nearLowO2);
+
   // ── Instability CO — flame degradation adds unburned fuel to exhaust ─────
   let coInstability = 0;
   if (!stable) {
@@ -845,7 +877,7 @@ function calcCombustion(gas, air, vfd_hz, fgr, mode) {
     if (lowO2)         factor = Math.max(factor, (0.5 - o2) * 3);
     coInstability = Math.min(4000, 400 + 1800 * factor);
   }
-  const co = Math.min(9999, Math.max(3, coCombustion + coInstability));
+  const co = Math.min(9999, Math.max(3, (coCombustion + coInstability) * fuelAvail));
 
   // ── NOx — LNE thermal base + prompt NOx floor ────────────────────────────
   // CB LNE burner: staged air mixing reduces thermal NOx base to ~90 ppm.
@@ -861,7 +893,7 @@ function calcCombustion(gas, air, vfd_hz, fgr, mode) {
   const firingFactor   = 0.55 + 0.45 * Math.pow(flowFrac, 0.30);   // small flames ≈ 0.80, full fire ≈ 1.0
   const thermalNOx = 90 * tempFactor * firingFactor * fgrSuppression * furnaceTempK;
   const promptNOx  = 8;
-  let nox = thermalNOx + promptNOx;
+  let nox = (thermalNOx + promptNOx) * fuelAvail;
   if (!stable) nox *= 0.70;
   nox = Math.max(0, Math.round(nox));
 
@@ -869,14 +901,16 @@ function calcCombustion(gas, air, vfd_hz, fgr, mode) {
   // Stack temp: firing rate is the dominant driver (turbulent flow regime),
   // ~2°F per 1% O₂, modest increase above ~10% FGR.
   //   Low fire ~320-340°F · Mid fire ~370-390°F · High fire ~440-460°F
-  const stackTemp = 260 + 180 * Math.pow(flowFrac, 0.55) + o2 * 2
-    + (fgrFrac > 0.10 ? (fgrFrac - 0.10) * 80 : 0);
+  const STACK_NO_FIRE = 90;   // °F — fan purging, no flame
+  const stackTemp = noFire ? STACK_NO_FIRE
+    : 260 + 180 * Math.pow(flowFrac, 0.55) + o2 * 2
+      + (fgrFrac > 0.10 ? (fgrFrac - 0.10) * 80 : 0);
   const dryFlueLoss  = (0.38 + ea * 0.0034) * (stackTemp - 60) / 100 * 4.2;
   const moistureLoss = 10.5;                        // H2O from hydrogen in CH4, HHV basis
   const RADIATION_BTU = 40000;                      // fixed shell loss
   const radiationLoss = btuInput > 0
     ? Math.min(3.0, (RADIATION_BTU / btuInput) * 100) : 0.5;
-  const eff = Math.max(0, Math.min(99.5,
+  const eff = noFire ? 0 : Math.max(0, Math.min(99.5,
     100 - dryFlueLoss - moistureLoss - radiationLoss
     - Math.min(co, 600) * 0.003));
 
@@ -892,10 +926,13 @@ function calcCombustion(gas, air, vfd_hz, fgr, mode) {
     else if (tooLean)       coReason = 'Lean blow-off — reduce air or decrease VFD';
     else if (fgrQuench)     coReason = 'FGR quench — cut FGR below 28%';
     else if (fgrAtLightOff) coReason = 'FGR too early — close FGR until flame is established';
-  } else if (co > 150) {
-    if (fgrFrac > 0.22)    coReason = 'FGR too high — incomplete combustion';
-    else if (lambda > 3.8) coReason = 'Excess air — lean quench, reduce air or VFD';
-    else if (lambda < 1.06) coReason = 'Rich — approaching CO breakpoint, add air or reduce gas';
+  } else if (marginal) {
+    if (nearRich || nearLowO2) coReason = 'Rich — at the CO breakpoint, add air or reduce gas';
+    else if (nearQuench)       coReason = 'FGR near quench limit — reduce FGR';
+    else if (nearFgrLO)        coReason = 'FGR at light-off — close FGR until flame is established';
+    else if (nearLean)         coReason = 'Excess air — lean, flame cooling; reduce air or VFD';
+    else if (fgrFrac > 0.22)   coReason = 'FGR too high — incomplete combustion';
+    else                       coReason = 'CO rising — trim air/fuel ratio';
   }
 
   return {
@@ -906,6 +943,8 @@ function calcCombustion(gas, air, vfd_hz, fgr, mode) {
     eff:     Math.round(eff * 10) / 10,
     ea:      Math.round(ea),
     stable,
+    marginal,
+    noFire,
     lambda:  Math.round(lambda * 100) / 100,
     coReason,
     airEff:  Math.round(airEff * 10) / 10,
@@ -933,7 +972,8 @@ function freshLightOff() {
   do {
     gas = 1.0 + Math.round(Math.random() * 6.0 * 10) / 10;  // 1.0–7.0%
     air = 3.0 + Math.round(Math.random() * 11.0 * 10) / 10; // 3.0–14.0%
-    if (calcCombustion(gas, air, 42.0, 0).stable) break;
+    const t = calcCombustion(gas, air, 42.0, 0);
+    if (t.stable && !t.marginal) break;
     attempts++;
   } while (attempts < 40);
   if (attempts >= 40) return SAFE_FALLBACK;
@@ -954,8 +994,9 @@ let hintsUnlocked    = false;       // hints hidden until first flameout (Advanc
 let skillMode        = 'beginner';  // 'beginner' or 'advanced'
 function hintsOn() { return skillMode === 'beginner' || hintsUnlocked; }
 
-// Analyzer lag filter state
-let lagO2 = 0, lagCO2 = 0, lagCO = 0, lagNOx = 0;
+// Analyzer lag filter state (efficiency is derived from the analyzer, so it
+// lags with O2; stack temp has its own slow thermal lag)
+let lagO2 = 0, lagCO2 = 0, lagCO = 0, lagNOx = 0, lagEff = 0, lagStack = 0;
 
 // Display-only noise state (flow meter jitter, thermocouple bounce)
 let flowNoise  = 0;
@@ -971,6 +1012,7 @@ function el(id) { return _els[id] || (_els[id] = document.getElementById(id)); }
 function seedLag(pt, mode) {
   const s = calcCombustion(pt.gas, pt.air, pt.vfd, pt.fgr, mode);
   lagO2 = s.o2; lagCO2 = s.co2; lagCO = s.co; lagNOx = s.nox;
+  lagEff = s.eff; lagStack = s.stackTemp;
 }
 
 // ─── VALIDATION ──────────────────────────────────────────────────────────────
@@ -1165,7 +1207,7 @@ function renderStructure() {
 }
 
 // ─── LIVE RENDER (every tick and every control change) ──────────────────────
-function render() {
+function render(timerTick) {
   const sim        = calcCombustion(currentPt.gas, currentPt.air, currentPt.vfd, currentPt.fgr, tuneMode);
   const validation = getValidation(currentPt, currentIdx);
 
@@ -1198,9 +1240,9 @@ function render() {
   el('btuInBar').style.width   = Math.min(100, (sim.btuInput / NAMEPLATE_MAX_INPUT) * 100) + '%';
 
   // Heat output
-  const outMMBTU = sim.btuOutput > 0 ? (sim.btuOutput / 1000000).toFixed(3) : '0.000';
+  const outMMBTU = sim.btuInput > 0 ? (sim.btuInput * lagEff / 100 / 1000000).toFixed(3) : '0.000';
   el('btuOutDisplay').innerHTML    = outMMBTU + ' <span class="unit">MMBTU/hr</span>';
-  el('btuOutEffDisplay').innerHTML = sim.btuInput > 0 ? `<span class="eff">${sim.eff}%</span>` : '—';
+  el('btuOutEffDisplay').innerHTML = sim.btuInput > 0 ? `<span class="eff">${(Math.round(lagEff * 10) / 10)}%</span>` : '—';
 
   // Validation
   // Beginner: hint shown LIVE whenever a constraint is not met
@@ -1235,54 +1277,63 @@ function render() {
   btnNext.textContent = nextLabel;
   btnNext.classList.toggle('active', canNext);
 
-  // Sim card + flame state
-  el('simCard').className = 'card' + (sim.stable ? '' : ' unstable');
+  // Sim card + flame state: STABLE → FLAME UNSTABLE (warning) → FLAMEOUT IMMINENT (countdown)
+  const flameState = !sim.stable ? 'tripped' : sim.marginal ? 'marginal' : 'stable';
+  el('simCard').className = 'card' + (flameState === 'tripped' ? ' unstable' : flameState === 'marginal' ? ' warn' : '');
   const badge = el('flameBadge');
-  if (!sim.stable) {
-    instabilityTicks++;
+  if (flameState === 'tripped') {
+    if (timerTick) instabilityTicks++;
     if (instabilityTicks >= FLAMEOUT_TICKS) {
       triggerFlameout(sim.coReason || 'Sustained instability — flame extinguished');
       return;
     }
-    badge.textContent = instabilityTicks >= IMMINENT_TICKS ? '⚠ FLAMEOUT IMMINENT' : '⚠ UNSTABLE';
+    badge.textContent = '⚠ FLAMEOUT IMMINENT';
     badge.className   = 'flame-badge flame-unstable';
   } else {
     instabilityTicks = 0;
-    badge.textContent = '● FLAME STABLE';
-    badge.className   = 'flame-badge flame-stable';
+    badge.textContent = flameState === 'marginal' ? '⚠ FLAME UNSTABLE' : '● FLAME STABLE';
+    badge.className   = 'flame-badge ' + (flameState === 'marginal' ? 'flame-warn' : 'flame-stable');
   }
 
-  // Analyzer lag — first-order filter on O2, CO₂, CO, NOx.
+  // Analyzer lag — first-order filter on O2, CO₂, CO, NOx, efficiency; slow
+  // thermal lag on stack temp. The filters always chase the true stack
+  // contents — a closed gas valve reads as air (O2 → 20.9%), never as zeros.
   // Fine-tune mode: warm analyzer, established sample flow → 2x faster response.
   const lagMult = tuneMode === 'fine' ? 2.0 : 1.0;
-  if (currentPt.gas < 0.5) {
-    // Gas off: snap to zero immediately (no phantom readings)
-    lagO2 = 0; lagCO2 = 0; lagCO = 0; lagNOx = 0;
-  } else {
-    lagO2  += (sim.o2  - lagO2)  * Math.min(1, ALPHA_O2  * lagMult);
-    lagCO2 += (sim.co2 - lagCO2) * Math.min(1, ALPHA_CO2 * lagMult);
-    lagCO  += (sim.co  - lagCO)  * Math.min(1, ALPHA_CO  * lagMult);
-    lagNOx += (sim.nox - lagNOx) * Math.min(1, ALPHA_NOX * lagMult);
-  }
+  lagO2    += (sim.o2        - lagO2)    * Math.min(1, ALPHA_O2    * lagMult);
+  lagCO2   += (sim.co2       - lagCO2)   * Math.min(1, ALPHA_CO2   * lagMult);
+  lagCO    += (sim.co        - lagCO)    * Math.min(1, ALPHA_CO    * lagMult);
+  lagNOx   += (sim.nox       - lagNOx)   * Math.min(1, ALPHA_NOX   * lagMult);
+  lagEff   += (sim.eff       - lagEff)   * Math.min(1, ALPHA_O2    * lagMult);
+  lagStack += (sim.stackTemp - lagStack) * Math.min(1, ALPHA_STACK * lagMult);
   const dispO2  = Math.round(lagO2  * 10) / 10;
   const dispCO2 = Math.round(lagCO2 * 10) / 10;
   const dispCO  = Math.round(lagCO);
   const dispNOx = Math.round(lagNOx);
+  const dispEff = Math.round(lagEff * 10) / 10;
 
   updateGauge('o2',  dispO2,  0,  20,   '%');
   updateGauge('co2', dispCO2, 0,  12,   '%');
   updateGauge('co',  dispCO,  0,  1000, 'ppm');
   updateGauge('nox', dispNOx, 0,  60,   'ppm');
-  updateGauge('eff', sim.eff, 70, 100,  '%');
-  el('eaVal').textContent     = sim.ea + '%';
-  el('lambdaVal').textContent = sim.lambda;
+  updateGauge('eff', dispEff, 70, 100,  '%');
+
+  // Excess air and lambda the way an analyzer derives them — from its own
+  // (lagged) O2 reading: λ = 20.9 / (20.9 − O2). Rich flames read λ = 1.00
+  // with O2 at zero; air alone (O2 near 20.9) has no ratio to show.
+  if (lagO2 >= 19.0) {
+    el('eaVal').textContent = '—'; el('lambdaVal').textContent = '—';
+  } else {
+    const lamDisp = 20.9 / (20.9 - lagO2);
+    el('eaVal').textContent     = Math.round((lamDisp - 1) * 100) + '%';
+    el('lambdaVal').textContent = (Math.round(lamDisp * 100) / 100).toFixed(2);
+  }
 
   // Stack temp thermocouple jitter — real K-type readings bounce ±3-5°F
   stackNoise += (Math.random() - 0.5) * 2.5;
   stackNoise *= 0.82;   // mean-reversion
   stackNoise  = Math.max(-5, Math.min(5, stackNoise));
-  const dispStackTemp = sim.stackTemp > 0 ? sim.stackTemp + Math.round(stackNoise) : 0;
-  el('stackTempVal').textContent = dispStackTemp + '°F';
+  el('stackTempVal').textContent = (Math.round(lagStack) + Math.round(stackNoise)) + '°F';
 
   // CO hint — only visible once hints are unlocked
   const coHint = el('coHint');
@@ -1308,8 +1359,8 @@ function render() {
   }
 
   hooks.renderReadings({
-    sim, o2: dispO2, co2: dispCO2, co: dispCO, nox: dispNOx,
-    stable: sim.stable, imminent: instabilityTicks >= IMMINENT_TICKS,
+    sim, o2: dispO2, co2: dispCO2, co: dispCO, nox: dispNOx, eff: dispEff,
+    flameState,
   });
 }
 
@@ -1521,6 +1572,7 @@ function triggerFlameout(reason) {
     'CO &gt; 500 ppm &nbsp;|&nbsp; Flame unstable<br/>' +
     'Reset required — begin relight from low fire.';
   el('flameoutOverlay').style.display = 'flex';
+  el('btnRelight').focus();
 }
 
 function relight() {
@@ -1553,8 +1605,16 @@ function startSim(pageHooks) {
   // the controls. Paused while the flameout overlay is up.
   setInterval(() => {
     if (el('flameoutOverlay').style.display === 'flex') return;
-    render();
+    render(true);
   }, LAG_DT * 1000);
+
+  // Keyboard: Enter relights while the lockout overlay is up
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && el('flameoutOverlay').style.display === 'flex') {
+      e.preventDefault();
+      relight();
+    }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1645,10 +1705,10 @@ startSim({
     set('stripO2',  r.o2.toFixed(1) + '<span class="live-cell-unit">%</span>',      gaugeColor('o2',  r.o2));
     set('stripCO',  r.co + '<span class="live-cell-unit">ppm</span>',               gaugeColor('co',  r.co));
     set('stripNOx', r.nox + '<span class="live-cell-unit">ppm</span>',              gaugeColor('nox', r.nox));
-    set('stripEff', r.sim.eff.toFixed(1) + '<span class="live-cell-unit">%</span>', gaugeColor('eff', r.sim.eff));
+    set('stripEff', r.eff.toFixed(1) + '<span class="live-cell-unit">%</span>', gaugeColor('eff', r.eff));
     const flame = el('stripFlame');
-    flame.textContent = r.stable ? '◉ STABLE' : (r.imminent ? '⚠ IMMINENT' : '⚠ UNSTABLE');
-    flame.className   = 'live-flame' + (r.stable ? '' : ' unstable');
+    flame.textContent = r.flameState === 'tripped' ? '⚠ IMMINENT' : r.flameState === 'marginal' ? '⚠ UNSTABLE' : '◉ STABLE';
+    flame.className   = 'live-flame' + (r.flameState === 'tripped' ? ' unstable' : r.flameState === 'marginal' ? ' warn' : '');
   },
 });
 </script>
