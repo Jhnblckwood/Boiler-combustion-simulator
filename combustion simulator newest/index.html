@@ -1003,7 +1003,7 @@ let flowNoise  = 0;
 let stackNoise = 0;
 
 // Page hooks (set by startSim)
-let hooks = { renderControls() {}, renderReadings() {} };
+let hooks = { renderControls() {}, renderReadings() {}, setControlsEnabled() {} };
 
 // Cached element lookup
 const _els = {};
@@ -1277,24 +1277,6 @@ function render(timerTick) {
   btnNext.textContent = nextLabel;
   btnNext.classList.toggle('active', canNext);
 
-  // Sim card + flame state: STABLE → FLAME UNSTABLE (warning) → FLAMEOUT IMMINENT (countdown)
-  const flameState = !sim.stable ? 'tripped' : sim.marginal ? 'marginal' : 'stable';
-  el('simCard').className = 'card' + (flameState === 'tripped' ? ' unstable' : flameState === 'marginal' ? ' warn' : '');
-  const badge = el('flameBadge');
-  if (flameState === 'tripped') {
-    if (timerTick) instabilityTicks++;
-    if (instabilityTicks >= FLAMEOUT_TICKS) {
-      triggerFlameout(sim.coReason || 'Sustained instability — flame extinguished');
-      return;
-    }
-    badge.textContent = '⚠ FLAMEOUT IMMINENT';
-    badge.className   = 'flame-badge flame-unstable';
-  } else {
-    instabilityTicks = 0;
-    badge.textContent = flameState === 'marginal' ? '⚠ FLAME UNSTABLE' : '● FLAME STABLE';
-    badge.className   = 'flame-badge ' + (flameState === 'marginal' ? 'flame-warn' : 'flame-stable');
-  }
-
   // Analyzer lag — first-order filter on O2, CO₂, CO, NOx, efficiency; slow
   // thermal lag on stack temp. The filters always chase the true stack
   // contents — a closed gas valve reads as air (O2 → 20.9%), never as zeros.
@@ -1311,6 +1293,27 @@ function render(timerTick) {
   const dispCO  = Math.round(lagCO);
   const dispNOx = Math.round(lagNOx);
   const dispEff = Math.round(lagEff * 10) / 10;
+
+  // Sim card + flame state: STABLE → FLAME UNSTABLE (warning) → FLAMEOUT IMMINENT (countdown)
+  const flameState = !sim.stable ? 'tripped' : sim.marginal ? 'marginal' : 'stable';
+  el('simCard').className = 'card' + (flameState === 'tripped' ? ' unstable' : flameState === 'marginal' ? ' warn' : '');
+  const badge = el('flameBadge');
+  if (flameState === 'tripped') {
+    if (timerTick) instabilityTicks++;
+    if (instabilityTicks >= FLAMEOUT_TICKS) {
+      // Hand over the readings as they stood on the gauges at the trip —
+      // frozen, not live.
+      triggerFlameout(sim.coReason || 'Sustained instability — flame extinguished',
+        { o2: dispO2, co: dispCO, nox: dispNOx });
+      return;
+    }
+    badge.textContent = '⚠ FLAMEOUT IMMINENT';
+    badge.className   = 'flame-badge flame-unstable';
+  } else {
+    instabilityTicks = 0;
+    badge.textContent = flameState === 'marginal' ? '⚠ FLAME UNSTABLE' : '● FLAME STABLE';
+    badge.className   = 'flame-badge ' + (flameState === 'marginal' ? 'flame-warn' : 'flame-stable');
+  }
 
   updateGauge('o2',  dispO2,  0,  20,   '%');
   updateGauge('co2', dispCO2, 0,  12,   '%');
@@ -1365,7 +1368,16 @@ function render(timerTick) {
 }
 
 // ─── CONTROL CHANGES (called by the page's sliders / steppers) ──────────────
+// True while the lockout overlay is up. The burner is tripped: nothing the
+// operator does to a slider or stepper should reach the tuning point until
+// they relight. (A drag in progress when the trip fires keeps sending events
+// to the page even though the overlay covers the control.)
+function lockedOut() {
+  return el('flameoutOverlay').style.display === 'flex';
+}
+
 function setControl(field, value) {
+  if (lockedOut()) return;
   currentPt[field] = value;
   isSaved = false;
   // Advanced: keep saveTried true while invalid — render() auto-clears it once valid
@@ -1471,7 +1483,9 @@ function generateL5X(savedPoints) {
     if (!pt) return '';
     const c  = calcCombustion(pt.gas, pt.air, pt.vfd, pt.fgr, pt.mode || tuneMode);
     const sp = Math.round((pt.vfd / VFD_MAX_HZ) * 100 * 10) / 10;
-    const ae = Math.round(((pt.air / 100) * (pt.vfd / VFD_MAX_HZ) * 100) * 10) / 10;
+    // AirEff comes from the engine (damper characteristic × fan speed), not a
+    // straight line — it must match the value that produced this point's O2.
+    const ae = c.airEff;
     return `
   <Tag Name="TunePoint_${String(i+1).padStart(2,'0')}" TagType="Base" DataType="TUNE_POINT" Constant="false" ExternalAccess="Read/Write">
     <Description><![CDATA[${POINTS[i].label} - ${POINTS[i].pct}% Firing Rate]]></Description>
@@ -1552,7 +1566,7 @@ ${pts}
 }
 
 // ─── FLAMEOUT / RELIGHT ──────────────────────────────────────────────────────
-function triggerFlameout(reason) {
+function triggerFlameout(reason, lastReadings) {
   instabilityTicks = 0;
   hintsUnlocked = true;   // Unlock all hints after first flameout
   currentIdx  = 0;
@@ -1565,11 +1579,19 @@ function triggerFlameout(reason) {
   saveTried   = false;
   // Seed lag states to light-off physics so gauges read correctly on relight
   seedLag(LIGHTOFF, 'rough');
+  // Snap the visible controls to the fresh light-off position and disable them.
+  // Disabling is what actually stops a drag that is in progress when the trip
+  // fires — the browser keeps sending events to a captured slider otherwise.
+  hooks.renderControls(currentPt);
+  hooks.setControlsEnabled(false);
 
+  const r = lastReadings || {};
+  const captured = (r.o2 === undefined) ? 'Flame unstable'
+    : `O₂ ${r.o2}% &nbsp;|&nbsp; CO ${r.co} ppm &nbsp;|&nbsp; NOₓ ${r.nox} ppm`;
   el('flameoutReason').innerHTML =
     'Cause: ' + reason + '<br/><br/>' +
     'Last readings before lockout:<br/>' +
-    'CO &gt; 500 ppm &nbsp;|&nbsp; Flame unstable<br/>' +
+    captured + '<br/>' +
     'Reset required — begin relight from low fire.';
   el('flameoutOverlay').style.display = 'flex';
   el('btnRelight').focus();
@@ -1577,6 +1599,7 @@ function triggerFlameout(reason) {
 
 function relight() {
   el('flameoutOverlay').style.display = 'none';
+  hooks.setControlsEnabled(true);
   seedLag(LIGHTOFF, 'rough');   // gauges read light-off values immediately
   render();
 }
@@ -1604,13 +1627,13 @@ function startSim(pageHooks) {
   // countdown) every LAG_DT seconds whether or not the operator is touching
   // the controls. Paused while the flameout overlay is up.
   setInterval(() => {
-    if (el('flameoutOverlay').style.display === 'flex') return;
+    if (lockedOut()) return;
     render(true);
   }, LAG_DT * 1000);
 
   // Keyboard: Enter relights while the lockout overlay is up
   document.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && el('flameoutOverlay').style.display === 'flex') {
+    if (e.key === 'Enter' && lockedOut()) {
       e.preventDefault();
       relight();
     }
@@ -1687,6 +1710,11 @@ stepBtns.forEach(btn => {
 });
 
 startSim({
+  setControlsEnabled(on) {
+    for (const f of FIELDS) sliders[f].disabled = !on;
+    // Step buttons: render() recomputes their per-limit state once enabled.
+    stepBtns.forEach(btn => { btn.disabled = !on; });
+  },
   renderControls(pt) {
     for (const f of FIELDS) {
       sliders[f].value = pt[f];
