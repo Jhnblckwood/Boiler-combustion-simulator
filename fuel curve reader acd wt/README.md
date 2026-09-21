@@ -1,12 +1,13 @@
-# Curve Script — ACD + L5K (Water Tube Boilers)
+# Curve Script — ACD + L5K (both fuels, both boiler types)
 
-This version reads **both `.ACD` and `.L5K`** files and shows the **stored
-per-fuel curve sets** (Fuel 1 and Fuel 2) with real commissioned values for
-**water tube boiler applications**.
+Reads **both `.ACD` and `.L5K`** files and shows the **stored per-fuel curve
+sets** (Fuel 1 and Fuel 2) with real commissioned values, for **both water
+tube and firetube** boilers — it auto-detects which layout a file uses.
 
-> **Note:** The `curve script - acd` folder contains the corresponding **firetube boiler** version.
-> The earlier `curve script` and `curve script - multi-fuel` folders are left
-> untouched as working checkpoints.
+> This folder and `curve re-write` (the same reader plus editing and
+> write-back) are the two current tools. The older `curve script`,
+> `curve script - multi-fuel` and `curve script - acd` folders each handle
+> only one fuel and/or one boiler type, and are superseded by this one.
 
 ## Python version (reads ACD and L5K)
 
@@ -38,10 +39,17 @@ for the values, and fails to parse older V20 projects, so it isn't used.)
    `Ref_Data` + an identical working copy — located by that "double curve"
    signature.
 
-**Versions:** verified on **V20** (RH250), **V35** (RH800) and **V37**
-(CCS_230021 and CCS_240020, water tube). The auto-detection is built to carry
-across the versions in between and newer ones; if a future file reads wrong,
-it's usually one more name-offset to add.
+**Versions:** verified on **V20** (RH250, bb1000_2), **V31** (bb1000_2),
+**V35** (RH800) and **V37** (CCS_230021 and CCS_240020, water tube). The
+auto-detection is built to carry across the versions in between and newer
+ones; if a future file reads wrong, it's usually one more name-offset to add.
+
+The strongest check available: the **same project saved from two different
+Studio 5000 versions** (`bb1000_2` as V20 and as V31) reads back a
+byte-identical table, despite a different tag-name offset (26 vs 30), a
+different record count (2,947 vs 7,400), four fewer streams in the container,
+and a 3x difference in file size. Whatever changes between versions, the
+decoded curve doesn't.
 
 ### The `.L5K` path
 

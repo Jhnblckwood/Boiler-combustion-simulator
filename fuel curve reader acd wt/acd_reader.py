@@ -291,15 +291,24 @@ def extract_multifuel_acd(path, progress=None) -> MultiFuelData:
         fuel_name = type_names[n - 1] if len(type_names) >= n else f"Fuel {n}"
         fuel = FuelCurves(number=n, name=fuel_name)
         for col, suffix in COLUMN_SUFFIX.items():
-            rec = value_rec(f"ArrayMgmt_F{n}{suffix}")
+            tag = f"ArrayMgmt_F{n}{suffix}"
+            rec = value_rec(tag)
             dec = _decode_array(rec) if rec else None
             if dec:
-                fuel.columns[col] = ColumnCurve(
+                cc = ColumnCurve(
                     found=True,
                     purge="%.8e" % dec["purge"],
                     lightoff="%.8e" % dec["lightoff"],
                     curve=["%.8e" % x for x in dec["curve"]],
                 )
+                # Firetube keeps the curve, purge and light-off together in
+                # this one FA_DataMgmt record, so all three report the same
+                # source tag (unlike water-tube, where purge and light-off are
+                # separate scalar tags).
+                cc.source_tag = tag
+                cc.purge_tag = tag
+                cc.lightoff_tag = tag
+                fuel.columns[col] = cc
             else:
                 fuel.columns[col] = ColumnCurve(found=False)
         data.fuels.append(fuel)
@@ -352,9 +361,14 @@ if __name__ == "__main__":
                 for kind in ("purge", "lightoff"):
                     tag = getattr(cc, kind + "_tag", None)
                     if tag:
+                        # Water-tube stores these as floats, firetube as
+                        # preformatted strings.
                         val = cc.purge if kind == "purge" else cc.lightoff
-                        print("    %-10s %-6s %s = %s"
-                              % ("", kind, tag, ("%g" % val) if val is not None else "-"))
+                        try:
+                            shown = "%g" % float(val)
+                        except (TypeError, ValueError):
+                            shown = "-"
+                        print("    %-10s %-6s %s = %s" % ("", kind, tag, shown))
         print()
 
     print(render_fuel_tables_text(result))

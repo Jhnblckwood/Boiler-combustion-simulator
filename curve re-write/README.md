@@ -10,6 +10,11 @@ No install, no server: everything runs in the browser, the same way the other
 `fuel curve reader acd wt` — firetube (`ArrayMgmt_F*`) and water-tube
 (`*Characterizer_*_Y`) programs, both fuels, `.ACD` and `.L5K`.
 
+> This folder and `fuel curve reader acd wt` (read-only) are the two current
+> tools. The older `curve script`, `curve script - multi-fuel` and
+> `curve script - acd` folders each handle only one fuel and/or one boiler
+> type, and are superseded by these.
+
 ## How editing works
 
 1. Drop a file in. The table reads out as usual.
@@ -72,6 +77,13 @@ the result was independently checked with the read-only Python reader in
   else byte-identical. Confirmed directly that *both* copies of the "double
   curve" signature were patched (not just one, which would otherwise silently
   break that column on the next read).
+* **Firetube `.ACD` write on an older Studio 5000 version (V20)** — the same
+  project saved as V20 rather than V31: a different tag-name offset, a
+  different record count, and four fewer streams in the container. Three
+  values edited (a curve point, a light-off, and one in another column) came
+  back exact, everything else unchanged. Nothing in the write path is
+  version-specific — offsets come from the same walk the reader already does,
+  and the container rebuild is generic over how many streams a file has.
 * **No-op write** (nothing edited) reports "No changes to write." and writes
   nothing.
 * **Invalid input** (a non-numeric value in an edited cell) aborts the whole
