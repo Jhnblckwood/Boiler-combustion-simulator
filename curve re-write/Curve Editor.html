@@ -46,6 +46,7 @@
   #editbar button:hover{background:#eef3f8;}
   #editbar button.primary{background:var(--accent);border-color:var(--accent);color:#fff;}
   #editbar button.primary:hover{filter:brightness(1.08);}
+  #o2Btn.dirty{border-color:var(--accent);background:#eaf6ec;color:var(--accent);}
   #editWarn{color:var(--muted);font-size:11.5px;}
   #writeStatus{font-size:12.5px;margin:0 2px 10px;min-height:1.2em;}
   #writeStatus.ok{color:var(--accent);}
@@ -71,6 +72,7 @@
     td.editable input{background:#2a2e1f;color:#e7e9ec;border-color:#4a5a6e;}
     td.editable input.dirty{background:#2c3a22;}
     td.editable input.bad{background:#3a2420;border-color:#c25a44;}
+    #o2Btn.dirty{background:#22331f;color:#a9d8b4;}
   }
 </style>
 </head>
@@ -88,6 +90,7 @@
   <div id="editbar">
     <button id="editBtn">Edit</button>
     <button id="writeBtn" class="primary" style="display:none;">Write Curve</button>
+    <button id="o2Btn" style="display:none;"></button>
     <button id="cancelBtn" style="display:none;">Cancel</button>
     <span id="editWarn"></span>
   </div>
@@ -292,6 +295,23 @@ function o2TrimEnabled(txt){
   return ((packed>>3)&1)===1;
 }
 
+/* Where the O2-trim toggle writes in an L5K: the packed Cfg literal at the end
+   of DesiredO2's initializer. Same word bit 3 is read from above, located with
+   the position-tracking parser so the new value can be spliced in place. */
+function o2FlagEditL5K(txt){
+  const found = extractBalancedPos(txt, "DesiredO2", "FuelAirCurveData");
+  if(found===null) return null;
+  const root = parseInitializerPos(found.text);
+  if(root.type!=="list" || root.items.length===0) return null;
+  const cfg = root.items[root.items.length-1];
+  if(cfg.type!=="list" || cfg.items.length===0) return null;
+  const node = cfg.items[0];
+  const packed = parseInt(parseFloat(node.value));
+  if(!isFinite(packed)) return null;
+  return {kind:"packedtext", start:found.start+node.start, end:found.start+node.end,
+          packed, bit:3};
+}
+
 function fuelTypeNames(txt){
   const names={};
   const m = /FuelTypeNames\s*:\s*String_20\[\d+\]\s*\(/.exec(txt);
@@ -312,7 +332,8 @@ function extractMultiFuel(txt){
     for(const col in COLUMN_SUFFIX) cols[col] = parseArrayMgmtEditable(txt, "ArrayMgmt_F"+num+COLUMN_SUFFIX[col]);
     fuels.push({number:num, name: tn[num-1] || ("Fuel "+num), cols});
   }
-  return {o2en, fuels, controller: (txt.match(/CONTROLLER\s+(\w+)/)||[])[1] || "", kind:"l5k" };
+  return {o2en, o2FlagEdit: o2FlagEditL5K(txt), fuels,
+          controller: (txt.match(/CONTROLLER\s+(\w+)/)||[])[1] || "", kind:"l5k" };
 }
 
 function cell(col, label, cc){
@@ -361,6 +382,21 @@ function o2HasData(data){
     const cc = f.cols["O2"];
     return cc && cc.found && cc.curve.some(v => Math.abs(parseFloat(v) || 0) > 1e-6);
   });
+}
+
+/* Reports whether trim actually runs; the column itself follows the data.
+   Derived from current state rather than baked in at parse time, so toggling
+   trim and writing updates the note to match what was written. */
+function o2NoteFor(data){
+  if(data.wt) return "Water-tube program. O2 trim " + (data.o2en ? "enabled." : "disabled.");
+  return data.o2en
+    ? "O2 trim is enabled (DesiredO2.Cfg.O2Curve = 1)."
+    : "O2 trim is disabled (DesiredO2.Cfg.O2Curve = 0).";
+}
+function refreshNotes(){
+  const el = document.getElementById("notes");
+  el.className = "notes";
+  el.innerHTML = currentFile ? "• " + o2NoteFor(currentFile.data) : "";
 }
 
 /* ---- rendering -------------------------------------------------------- */
@@ -416,12 +452,7 @@ function render(data, filename){
   document.getElementById("status").textContent =
     filename + (data.controller ? "  •  controller: " + data.controller : "") + "  •  both fuels";
 
-  // Reports whether trim actually runs; the column itself follows the data.
-  const o2note = data.o2note || (data.o2en
-    ? "O2 trim is enabled (DesiredO2.Cfg.O2Curve = 1)."
-    : "O2 trim is disabled (DesiredO2.Cfg.O2Curve = 0).");
-  document.getElementById("notes").className = "notes";
-  document.getElementById("notes").innerHTML = "• " + o2note;
+  refreshNotes();
 
   document.getElementById("editBtn").style.display = "";
   document.getElementById("writeBtn").style.display = "none";
@@ -496,7 +527,10 @@ function _decodeDesired(buf){
     const curve=[]; let good=true;
     for(let k=0;k<16;k++){const v=_f32(dv,off+32+4*k); if(!(isFinite(v)&&v>-1e5&&v<1e5)){good=false;break;} curve.push(v);}
     if(!good) continue;
-    return {purge:_f32(dv,off+24), lightoff:_f32(dv,off+28), curve, cfg:_i32(dv,off+132)};
+    // cfgOffset is absolute in Comps.Dat (buf is a subarray view, never a
+    // copy), so the O2-trim toggle can flip bit 3 of it on write.
+    return {purge:_f32(dv,off+24), lightoff:_f32(dv,off+28), curve,
+            cfg:_i32(dv,off+132), cfgOffset: buf.byteOffset+off+132};
   }
   return null;
 }
@@ -640,6 +674,20 @@ function wtFlag(lookup, names){
   }
   return [null, null];
 }
+/* Where a flag tag's payload sits, so the O2-trim toggle can write it back.
+   Returns absolute offset into Comps.Dat plus the payload width, since a BOOL
+   is 1 byte but the same tag could be an INT/DINT/REAL elsewhere. */
+function wtFlagEdit(lookup, names){
+  for(const nm of names){
+    const buf = lookup(nm);
+    if(!buf) continue;
+    for(const [off,ln] of wtPayloads(buf)){
+      if(FLAG_WIDTHS.indexOf(ln)<0) continue;
+      return {kind:"flagbytes", offset: buf.byteOffset+off, len: ln, tag: nm};
+    }
+  }
+  return null;
+}
 
 function wtExtract(lookup){
   const fuels=[]; let points=0; const o2Tags=[];
@@ -687,11 +735,16 @@ function wtExtract(lookup){
   // Falls back to "is there any characterizer data" if the tag is missing.
   const [standby] = wtFlag(lookup, O2_STANDBY_TAGS);
   const o2en = (standby!==null) ? !standby : (o2Tags.length>0);
+  // The toggle writes the standby tag itself. It's inverted, so "enable trim"
+  // means writing zero. Only offered when the tag actually resolved — with no
+  // tag there's nothing to write, whatever the fallback guessed.
+  const flagLoc = (standby!==null) ? wtFlagEdit(lookup, O2_STANDBY_TAGS) : null;
+  const o2FlagEdit = flagLoc ? Object.assign({inverted:true}, flagLoc) : null;
 
   return {
-    o2en, fuels, controller:"",
+    o2en, o2FlagEdit, fuels, controller:"",
     columnOrder:COLUMNS, rowLabels,
-    o2note:"Water-tube program. O2 trim "+(o2en?"enabled.":"disabled."),
+    wt:true,
     kind:"acd",
   };
 }
@@ -729,6 +782,11 @@ function extractMultiFuelACD(compsDat){
     if(dec && Math.abs(dec.curve[0])>0.01){ vp=byId[oid].parent_id; o2dec=dec; break; }
   }
   const o2en = !!(o2dec && ((o2dec.cfg>>3)&1));
+  // Where the O2-trim toggle writes: bit 3 of DesiredO2's packed Cfg word.
+  // The per-fuel ArrayMgmt_F*O2 records carry no separate enable bit (the
+  // config words after their curve copies are identical to the Air record's),
+  // so this one flag is the whole story.
+  const o2FlagEdit = o2dec ? {kind:"bit", offset:o2dec.cfgOffset, bit:3} : null;
   // Must be an actual "$hash$" value record — not just any reference the tag
   // definition happens to embed (its RxTagCollection, its FA_DataMgmt type
   // record, ...). Without this check, a file where DesiredO2 itself is blank
@@ -759,7 +817,8 @@ function extractMultiFuelACD(compsDat){
     }
     fuels.push({number:n, name: names[n-1] || ("Fuel "+n), cols});
   }
-  return {o2en, fuels, controller: (comps["Controller"]&&comps["Controller"].name)||"", kind:"acd" };
+  return {o2en, o2FlagEdit, fuels,
+          controller: (comps["Controller"]&&comps["Controller"].name)||"", kind:"acd" };
 }
 
 /* ---- ACD container (rebuild-on-write) ----------------------------------
@@ -839,14 +898,34 @@ function setWriteStatus(msg, isError){
   el.className = isError ? "err" : "ok";
 }
 
+/* The O2-trim toggle. Offered only when the file both has a real O2 curve and
+   a flag we know how to write — flipping trim on for a boiler with no
+   commissioned curve would enable trimming against nothing. */
+function o2Togglable(data){
+  return !!(data && data.o2FlagEdit && o2HasData(data));
+}
+function refreshO2Button(){
+  const btn = document.getElementById("o2Btn");
+  if(!currentFile || !o2Togglable(currentFile.data)){ btn.style.display = "none"; return; }
+  const pending = currentFile.pendingO2;
+  btn.style.display = "";
+  btn.textContent = "O2 trim: " + (pending ? "On" : "Off");
+  btn.classList.toggle("dirty", pending !== currentFile.data.o2en);
+  btn.title = pending === currentFile.data.o2en
+    ? "Click to " + (pending ? "disable" : "enable") + " O2 trim in the written file"
+    : "Changed from " + (currentFile.data.o2en ? "On" : "Off") + " — will be written";
+}
+
 function enterEditMode(){
   currentFile.editing = true;
+  currentFile.pendingO2 = currentFile.data.o2en;
   document.getElementById("editBtn").style.display = "none";
   document.getElementById("writeBtn").style.display = "";
   document.getElementById("cancelBtn").style.display = "";
   document.getElementById("editWarn").textContent =
     "Writes a new “_updated” file — the original is never touched. Verify the result in Studio 5000 before using it on a live boiler.";
   setWriteStatus("", false);
+  refreshO2Button();
   document.querySelectorAll("#tables td.editable").forEach(td=>{
     const span = td.querySelector(".v");
     const val = span ? span.textContent : "";
@@ -870,9 +949,11 @@ function exitEditMode(keepEdits){
     td.innerHTML = "<span class='v'>"+escapeHtml(val)+"</span>";
   });
   currentFile.editing = false;
+  if(!keepEdits) currentFile.pendingO2 = currentFile.data.o2en;
   document.getElementById("editBtn").style.display = "";
   document.getElementById("writeBtn").style.display = "none";
   document.getElementById("cancelBtn").style.display = "none";
+  document.getElementById("o2Btn").style.display = "none";
   document.getElementById("editWarn").textContent = "";
 }
 function collectDirtyEdits(){
@@ -889,7 +970,17 @@ function collectDirtyEdits(){
   return dirty;
 }
 
-async function writeAcd(dirty){
+// Describes a staged O2-trim flip, or null when trim isn't being changed.
+function pendingO2Change(){
+  if(!currentFile || !o2Togglable(currentFile.data)) return null;
+  if(currentFile.pendingO2 === currentFile.data.o2en) return null;
+  return {to: currentFile.pendingO2, edit: currentFile.data.o2FlagEdit};
+}
+function o2ChangeNote(change){
+  return change ? "  O2 trim " + (change.to ? "enabled." : "disabled.") : "";
+}
+
+async function writeAcd(dirty, o2change){
   const compsDat = currentFile.compsDat;
   const dv = new DataView(compsDat.buffer);
   for(const d of dirty){
@@ -897,6 +988,22 @@ async function writeAcd(dirty){
     const target = cellEdit(d.col, d.label, cc);   // same lookup used to render
     if(!target) continue;                          // defensive; shouldn't happen
     for(const off of target) dv.setFloat32(off, d.num, true);
+  }
+  if(o2change){
+    const e = o2change.edit;
+    if(e.kind === "bit"){
+      // Firetube: flip bit 3 of DesiredO2's packed Cfg word, leaving every
+      // other bit in it exactly as it was.
+      const cur = dv.getInt32(e.offset, true);
+      const next = o2change.to ? (cur | (1<<e.bit)) : (cur & ~(1<<e.bit));
+      dv.setInt32(e.offset, next, true);
+    } else if(e.kind === "flagbytes"){
+      // Water-tube: the tag is OxygenTrimInStandby, so it's inverted —
+      // enabling trim means writing zero.
+      const raw = e.inverted ? (o2change.to ? 0 : 1) : (o2change.to ? 1 : 0);
+      for(let i=0;i<e.len;i++) compsDat[e.offset+i] = 0;
+      compsDat[e.offset] = raw;
+    }
   }
   const newComps = await gzip(compsDat);
   const entries = currentFile.container.entries.map(en =>
@@ -906,16 +1013,23 @@ async function writeAcd(dirty){
   const outName = updatedFilename(currentFile.filename);
   downloadBytes(rebuilt, outName, "application/octet-stream");
   setWriteStatus("Wrote " + outName + " (" + dirty.length + " value" + (dirty.length===1?"":"s")
-    + " changed). This is a new file — the original is untouched. Open it in Studio 5000 and verify before using it on a live boiler.", false);
+    + " changed)." + o2ChangeNote(o2change)
+    + " This is a new file — the original is untouched. Open it in Studio 5000 and verify before using it on a live boiler.", false);
 }
 
-function writeL5k(dirty){
+function writeL5k(dirty, o2change){
   const edits = [];
   for(const d of dirty){
     const cc = currentFile.data.fuels[d.fuelIdx].cols[d.col];
     const span = cellEdit(d.col, d.label, cc);
     if(!span) continue;
     edits.push({start: span.start, end: span.end, text: d.text});
+  }
+  if(o2change){
+    // Same bit, same word — just expressed as a decimal literal in the text.
+    const e = o2change.edit;
+    const next = o2change.to ? (e.packed | (1<<e.bit)) : (e.packed & ~(1<<e.bit));
+    edits.push({start: e.start, end: e.end, text: String(next)});
   }
   edits.sort((a,b)=>b.start-a.start);   // splice from the end so earlier spans stay valid
   let text = currentFile.text;
@@ -924,7 +1038,8 @@ function writeL5k(dirty){
   const outName = updatedFilename(currentFile.filename);
   downloadBytes(new TextEncoder().encode(text), outName, "text/plain");
   setWriteStatus("Wrote " + outName + " (" + dirty.length + " value" + (dirty.length===1?"":"s")
-    + " changed). This is a new file — the original is untouched. Re-import it into Studio 5000 and verify before using it on a live boiler.", false);
+    + " changed)." + o2ChangeNote(o2change)
+    + " This is a new file — the original is untouched. Re-import it into Studio 5000 and verify before using it on a live boiler.", false);
 }
 
 document.getElementById("editBtn").addEventListener("click", ()=>{
@@ -934,10 +1049,16 @@ document.getElementById("cancelBtn").addEventListener("click", ()=>{
   exitEditMode(false);
   setWriteStatus("", false);
 });
+document.getElementById("o2Btn").addEventListener("click", ()=>{
+  if(!currentFile || !o2Togglable(currentFile.data)) return;
+  currentFile.pendingO2 = !currentFile.pendingO2;
+  refreshO2Button();
+});
 document.getElementById("writeBtn").addEventListener("click", async ()=>{
   if(!currentFile) return;
   const dirty = collectDirtyEdits();
-  if(dirty.length===0){ setWriteStatus("No changes to write.", false); return; }
+  const o2change = pendingO2Change();
+  if(dirty.length===0 && !o2change){ setWriteStatus("No changes to write.", false); return; }
   if(dirty.some(d=>!isFinite(d.num))){
     setWriteStatus("One or more edited values aren't valid numbers — nothing written.", true);
     return;
@@ -945,8 +1066,9 @@ document.getElementById("writeBtn").addEventListener("click", async ()=>{
   const btn = document.getElementById("writeBtn");
   btn.disabled = true;
   try{
-    if(currentFile.data.kind === "acd") await writeAcd(dirty);
-    else writeL5k(dirty);
+    if(currentFile.data.kind === "acd") await writeAcd(dirty, o2change);
+    else writeL5k(dirty, o2change);
+    if(o2change){ currentFile.data.o2en = o2change.to; refreshNotes(); }
     exitEditMode(true);
   }catch(err){
     setWriteStatus("Write failed: " + err.message, true);

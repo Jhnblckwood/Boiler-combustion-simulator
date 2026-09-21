@@ -25,12 +25,37 @@ No install, no server: everything runs in the browser, the same way the other
 3. Type new values into whichever cells need to change. Only cells you
    actually touch are written; everything else is carried through byte-for-byte
    from the original file, untouched.
-4. **Write Curve** — validates every edited cell is a real number (if any
+4. **O2 trim: On / Off** — flips O2 trim for the written file. The button
+   shows the state the file will be written with, and turns green once that
+   differs from what the file currently says. See
+   [Toggling O2 trim](#toggling-o2-trim) below.
+5. **Write Curve** — validates every edited cell is a real number (if any
    aren't, nothing is written and it tells you which), then downloads a new
    file named `<original name>_updated.<ext>`. **The original file is never
    modified** — the browser can't overwrite it even if it wanted to; it can
    only ever hand you a new file to save.
-5. **Cancel** discards the edits and goes back to the read-only view.
+6. **Cancel** discards the edits and goes back to the read-only view.
+
+## Toggling O2 trim
+
+The toggle is offered **only when the file has a real stored O2 curve** —
+turning trim on for a boiler with no commissioned curve would set it trimming
+against nothing, so the button simply doesn't appear there (`bb1000_2` is an
+example: no O2 curve, no toggle).
+
+It writes one flag and nothing else. Curve values are untouched:
+
+| | Flag written | Notes |
+|---|---|---|
+| Firetube | bit 3 of `DesiredO2`'s packed `Cfg` word | Every other bit in that word is preserved — only bit 3 is masked in or out. The per-fuel `ArrayMgmt_F*O2` records carry no separate enable bit (the config words after their curve copies are identical to the Air record's), so this one flag is the whole story. |
+| Water tube | `OxygenTrimInStandby` | **Inverted** — enabling trim writes `0`. Written across the tag's full payload width, so it's right whether it's a `BOOL`, `INT`, `DINT` or `REAL`. |
+| `.L5K` | the same packed `Cfg` literal, as text | Same bit, same word, just spliced into the text as a decimal. |
+
+The note under the table updates to match what was written.
+
+Toggling twice returns to the original state and reports "No changes to
+write" rather than producing a pointless file, and Cancel discards a staged
+toggle like any other edit.
 
 ## Before you trust the output
 
@@ -77,6 +102,15 @@ the result was independently checked with the read-only Python reader in
   else byte-identical. Confirmed directly that *both* copies of the "double
   curve" signature were patched (not just one, which would otherwise silently
   break that column on the next read).
+* **O2 trim toggle, both boiler types** — trim flipped on, re-read, flag
+  changed with every curve value byte-identical. Then flipped back off:
+  the firetube `Cfg` word went `0 → 8 → 0`, i.e. restored exactly, proving
+  only bit 3 was touched and no other config bit was disturbed. Water tube
+  round-tripped the same way with its fresh-air flag untouched. The toggle
+  correctly doesn't appear on a file with no O2 curve.
+* **Curve edits and a trim toggle in one write** — both applied together, on
+  `.ACD` (2 values + flag) and `.L5K` (1 value + the `Cfg` literal `[8]` →
+  `[0]`, nothing else in the text moved).
 * **O2 column edit** — the O2 column shows whenever a stored O2 curve has real
   values, even with trim disabled in config, so those values can be edited
   like any other. Two O2 points edited across both fuels came back exact, with
