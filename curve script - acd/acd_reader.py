@@ -238,9 +238,17 @@ def extract_multifuel_acd(path, progress=None) -> MultiFuelData:
             break
 
     def value_rec(tag):
+        # Must be an actual "$hash$" value record, not just any reference the
+        # tag definition happens to embed (its RxTagCollection, its
+        # FA_DataMgmt type record, ...). Without this check, a file where
+        # DesiredO2 itself is blank (so vp never gets set) silently returns
+        # whichever reference comes first, which usually isn't the value.
         for oid in _refs_of(comps, by_id, tag):
-            if vp is None or by_id[oid][1] == vp:
-                return by_id[oid][2]
+            name, parent, buf = by_id[oid]
+            if not (name.startswith("$") and name.endswith("$")):
+                continue
+            if vp is None or parent == vp:
+                return buf
         return None
 
     data = MultiFuelData(source_file=os.path.basename(str(path)))
