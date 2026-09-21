@@ -66,21 +66,29 @@ the result was independently checked with the read-only Python reader in
 * **`.L5K` write** — a curve point edited, the resulting text diffed
   line-for-line against the original: exactly one literal changed
   (`21.1` → `99.75`), whitespace and formatting elsewhere untouched.
+* **Firetube `.ACD` write, three values across a curve point, a purge value,
+  and a second column** — re-read, exactly those three values changed
+  (including full float32 precision, e.g. `29.100000381469727`), everything
+  else byte-identical. Confirmed directly that *both* copies of the "double
+  curve" signature were patched (not just one, which would otherwise silently
+  break that column on the next read).
 * **No-op write** (nothing edited) reports "No changes to write." and writes
   nothing.
 * **Invalid input** (a non-numeric value in an edited cell) aborts the whole
   write with no file produced — never a partially-written file.
 * **Cancel** reverts every field to its original value with no write.
 
-**Not tested — no firetube `.ACD` sample was available while building this**
-(the uploaded sample expired mid-session). The firetube write path patches
-both copies of the "double curve" signature `_decode_array` relies on (see
-`fuel curve reader acd wt/acd_reader.py`) — the offsets are computed the same
-way the already-validated *read* path locates them, just written to instead of
-read from, so the mechanism is the same one already proven correct on real
-firetube files. But it has not itself been round-tripped through a real
-firetube `.ACD`. Treat a firetube `_updated.ACD` with extra care until that's
-been done, and see it open correctly in Studio 5000 before relying on it.
+Testing the firetube path surfaced a real pre-existing **read** bug, unrelated
+to writing: on a file where `DesiredO2`'s own curve happens to be all zero, the
+reader's tag-value lookup (`value_rec` / `valueRec`) picked the *first*
+reference a tag definition embedded rather than checking it was actually a
+value record — silently returning garbage (blank curves, garbled fuel names)
+instead of the real data. Fixed by requiring the `$hash$` naming convention the
+water-tube path already checked for. This shipped as its own fix, everywhere
+it existed across the repo (`curve script - acd`, `fuel curve reader acd wt`,
+and this folder) — see that commit for the full account. The write-back logic
+itself was never the problem; it just had nothing correct to read from until
+this was fixed.
 
 ## How the ACD write-back works
 
