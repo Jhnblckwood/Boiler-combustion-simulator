@@ -356,8 +356,17 @@ async function extractMultiFuelACD(u8){
     if(dec && Math.abs(dec.curve[0])>0.01){ vp=byId[oid].parent_id; o2dec=dec; break; }
   }
   const o2en = !!(o2dec && ((o2dec.cfg>>3)&1));
+  // Must be an actual "$hash$" value record — not just any reference the tag
+  // definition happens to embed (its RxTagCollection, its FA_DataMgmt type
+  // record, ...). Without this check, a file where DesiredO2 itself is blank
+  // (so vp never gets set) silently picks whichever reference comes first,
+  // which usually isn't the value at all.
+  const isValueName = nm => nm.charAt(0)==="$" && nm.charAt(nm.length-1)==="$";
   const valueRec = tag => {
-    for(const oid of refsOf(tag)) if(vp===null || byId[oid].parent_id===vp) return byId[oid].buffer;
+    for(const oid of refsOf(tag)){
+      const e=byId[oid];
+      if(isValueName(e.name) && (vp===null || e.parent_id===vp)) return e.buffer;
+    }
     return null;
   };
   let names=[]; const ftn=valueRec("FuelTypeNames");
