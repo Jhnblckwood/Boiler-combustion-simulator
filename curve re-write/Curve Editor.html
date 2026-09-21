@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Combustion Curve Reader</title>
+<style>
+  :root{
+    --winbg:#f4f5f7; --ink:#1e1e1e; --drop-bg:#eef3f8; --drop-fg:#33475b;
+    --drop-border:#9fb2c6; --section:#e8eef5; --fuel:#d5e3d5; --colhdr:#eef1f4;
+    --notes:#fbfbf7; --line:#d3d6db; --muted:#5b6470; --accent:#2f6f4f;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--winbg);color:var(--ink);
+       font-family:"Segoe UI",system-ui,Arial,sans-serif;padding:18px;}
+  h1{font-size:17px;margin:2px 2px 2px;}
+  .byline{color:var(--muted);font-size:12px;margin:0 2px 14px;}
+  .drop{border:2px dashed var(--drop-border);background:var(--drop-bg);color:var(--drop-fg);
+        text-align:center;border-radius:8px;padding:26px 12px;line-height:1.55;
+        font-size:14px;cursor:pointer;transition:background .15s,border-color .15s;}
+  .drop:hover{background:#e4edf6;}
+  .drop.over{background:#dcecff;border-color:#3a7bd5;}
+  .drop .big{font-size:15px;font-weight:600;}
+  .drop .sub{font-size:12.5px;opacity:.85;margin-top:3px;}
+  .status{color:var(--muted);font-size:12.5px;margin:12px 2px 6px;min-height:1.2em;}
+  #tables{display:flex;flex-direction:column;gap:20px;}
+  .fueltable{border:1px solid var(--line);border-radius:6px;overflow:hidden;
+             background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.06);}
+  .banner{background:var(--fuel);font-weight:700;font-size:13.5px;padding:8px 14px;}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;}
+  th,td{padding:4px 10px;text-align:center;white-space:nowrap;border-bottom:1px solid #eee;}
+  th{background:var(--colhdr);color:#2b3a4a;font-weight:700;}
+  td.lbl,th.lbl{width:66px;color:#333;font-weight:600;background:#fafafa;}
+  th.air,td.air{min-width:120px;}
+  tr.section td{background:var(--section);}
+  tr:last-child td{border-bottom:none;}
+  .notes{background:var(--notes);border:1px solid #ececdf;border-radius:6px;
+         margin-top:16px;padding:10px 13px;font-size:12.5px;color:#3a3a2f;line-height:1.7;
+         text-align:center;}
+  .hint{color:var(--muted);font-size:12px;margin-top:14px;}
+  input[type=file]{display:none;}
+  #editbar{display:none;align-items:center;gap:10px;margin:4px 2px 14px;flex-wrap:wrap;}
+  #editbar button{font:inherit;font-size:12.5px;font-weight:600;padding:6px 14px;
+                   border-radius:5px;border:1px solid var(--drop-border);
+                   background:#fff;color:var(--drop-fg);cursor:pointer;}
+  #editbar button:hover{background:#eef3f8;}
+  #editbar button.primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+  #editbar button.primary:hover{filter:brightness(1.08);}
+  #editWarn{color:var(--muted);font-size:11.5px;}
+  #writeStatus{font-size:12.5px;margin:0 2px 10px;min-height:1.2em;}
+  #writeStatus.ok{color:var(--accent);}
+  #writeStatus.err{color:#b5432f;}
+  td.editable{cursor:text;}
+  td.editable .v{border-bottom:1px dotted var(--drop-border);}
+  td.editable input{width:64px;font:inherit;font-size:12.5px;text-align:center;
+                     border:1px solid var(--drop-border);border-radius:3px;padding:2px 3px;
+                     background:#fffef2;color:inherit;}
+  td.editable input.dirty{border-color:var(--accent);background:#fbfff0;}
+  td.editable input.bad{border-color:#b5432f;background:#fff0ee;}
+  @media (prefers-color-scheme: dark){
+    :root{--winbg:#20242b;--ink:#e7e9ec;--drop-bg:#263041;--drop-fg:#cfe0f2;
+          --drop-border:#4a5a6e;--section:#2a333f;--fuel:#2f4638;--colhdr:#2b333d;
+          --notes:#2a2a24;--line:#3a4048;--muted:#9aa4b1;}
+    .drop:hover{background:#2c384a;} .drop.over{background:#31445e;}
+    .fueltable{background:#242932;box-shadow:none;}
+    th,td{border-bottom-color:#333a43;}
+    td.lbl,th.lbl{background:#20252c;color:#cdd3da;}
+    .notes{border-color:#3a3a2f;color:#d8d8c8;}
+    #editbar button{background:#242932;color:#cfe0f2;}
+    #editbar button:hover{background:#2c384a;}
+    td.editable input{background:#2a2e1f;color:#e7e9ec;border-color:#4a5a6e;}
+    td.editable input.dirty{background:#2c3a22;}
+    td.editable input.bad{background:#3a2420;border-color:#c25a44;}
+  }
+</style>
+</head>
+<body>
+  <h1>Combustion Curve Reader</h1>
+  <div class="byline">Created and Designed by John Rohlfing Jr.</div>
+
+  <div id="drop" class="drop">
+    <div class="big">Drag a Studio 5000 <b>.ACD</b> or <b>.L5K</b> file here</div>
+    <div class="sub">(or click to browse)</div>
+  </div>
+  <input type="file" id="file" accept=".ACD,.acd,.L5K,.l5k,.txt">
+
+  <div id="status" class="status">Ready.</div>
+  <div id="editbar">
+    <button id="editBtn">Edit</button>
+    <button id="writeBtn" class="primary" style="display:none;">Write Curve</button>
+    <button id="cancelBtn" style="display:none;">Cancel</button>
+    <span id="editWarn"></span>
+  </div>
+  <div id="writeStatus"></div>
+  <div id="tables"></div>
+  <div id="notes"></div>
+
+<script>
+/* ---- L5K multi-fuel parsing (matches fuel_curves.py) ------------------- */
+const COLUMN_SUFFIX = { "Air":"Air", "Fuel Act1":"A1", "FGR":"FGR", "VFD":"VFD", "O2":"O2" };
+const ROW_LABELS = ["purge","LtOff","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16"];
+
+function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+function fmt(raw){
+  if(raw===null || raw===undefined || raw==="") return "";
+  const num = parseFloat(raw);
+  if(isNaN(num)) return String(raw);
+  let r = Math.round(num*10)/10;
+  if(r===0) return "0";
+  if(Number.isInteger(r)) return String(r);
+  return r.toFixed(1);
+}
+
+function parseInitializer(text){
+  let i=0; const n=text.length;
+  const skipws=()=>{ while(i<n && " \t\r\n".indexOf(text[i])>=0) i++; };
+  function parseValue(){
+    skipws(); const c=text[i];
+    if(c==="[") return parseList();
+    if(c==="'") return parseString();
+    return parseScalar();
+  }
+  function parseList(){
+    i++; const items=[]; skipws();
+    if(i<n && text[i]==="]"){ i++; return items; }
+    while(i<n){
+      items.push(parseValue()); skipws();
+      if(i<n && text[i]===","){ i++; continue; }
+      if(i<n && text[i]==="]"){ i++; break; }
+      break;
+    }
+    return items;
+  }
+  function parseString(){
+    i++; let s="";
+    while(i<n){
+      if(text[i]==="$"){ i+=2; continue; }
+      if(text[i]==="'"){ i++; break; }
+      s+=text[i]; i++;
+    }
+    return s;
+  }
+  function parseScalar(){
+    let start=i;
+    while(i<n && ",[]' \t\r\n".indexOf(text[i])<0) i++;
+    return text.slice(start,i);
+  }
+  return parseValue();
+}
+
+function extractBalanced(txt, tagName, type){
+  const re = new RegExp("\\b"+escapeRe(tagName)+"\\s*:\\s*"+type+"\\s*:=");
+  const m = re.exec(txt); if(!m) return null;
+  let i = m.index + m[0].length; const n = txt.length;
+  while(i<n && txt[i]!=="[") i++;
+  const start=i; let depth=0, inStr=false;
+  while(i<n){
+    const c=txt[i];
+    if(inStr){ if(c==="$"){i+=2;continue;} if(c==="'") inStr=false; }
+    else if(c==="'") inStr=true;
+    else if(c==="[") depth++;
+    else if(c==="]"){ depth--; if(depth===0) return txt.slice(start, i+1); }
+    i++;
+  }
+  return null;
+}
+
+function isNumericList(x, len){
+  if(!Array.isArray(x)) return false;
+  if(len!==undefined && x.length!==len) return false;
+  return x.every(e => typeof e==="string" && /^-?[\d.]/.test(e));
+}
+
+function parseArrayMgmt(txt, tag){
+  const raw = extractBalanced(txt, tag, "FA_DataMgmt");
+  if(raw===null) return {found:false};
+  const parsed = parseInitializer(raw);
+  if(!Array.isArray(parsed)) return {found:false};
+  let ci=-1;
+  for(let k=0;k<parsed.length;k++){ if(isNumericList(parsed[k],16)){ ci=k; break; } }
+  if(ci<0) return {found:false};
+  return {
+    found:true,
+    curve: parsed[ci].slice(),
+    purge: (ci>=2 && isNumericList(parsed[ci-2])) ? parsed[ci-2][0] : null,
+    lightoff: (ci>=1 && isNumericList(parsed[ci-1])) ? parsed[ci-1][0] : null
+  };
+}
+
+/* ---- position-tracking variants, for write-back ------------------------
+   Same grammar as parseInitializer/extractBalanced above, but every node also
+   carries the character span it occupies in the source text, so an edited
+   value can be spliced back into the exact place it came from. Kept separate
+   from the read-only versions above so the display path is untouched. */
+function extractBalancedPos(txt, tagName, type){
+  const re = new RegExp("\\b"+escapeRe(tagName)+"\\s*:\\s*"+type+"\\s*:=");
+  const m = re.exec(txt); if(!m) return null;
+  let i = m.index + m[0].length; const n = txt.length;
+  while(i<n && txt[i]!=="[") i++;
+  const start=i; let depth=0, inStr=false;
+  while(i<n){
+    const c=txt[i];
+    if(inStr){ if(c==="$"){i+=2;continue;} if(c==="'") inStr=false; }
+    else if(c==="'") inStr=true;
+    else if(c==="[") depth++;
+    else if(c==="]"){ depth--; if(depth===0) return {text:txt.slice(start,i+1), start}; }
+    i++;
+  }
+  return null;
+}
+function parseInitializerPos(text){
+  let i=0; const n=text.length;
+  const skipws=()=>{ while(i<n && " \t\r\n".indexOf(text[i])>=0) i++; };
+  function parseValue(){
+    skipws(); const c=text[i];
+    if(c==="[") return parseList();
+    if(c==="'") return parseString();
+    return parseScalar();
+  }
+  function parseList(){
+    const start=i; i++; const items=[]; skipws();
+    if(i<n && text[i]==="]"){ i++; return {type:"list", items, start, end:i}; }
+    while(i<n){
+      items.push(parseValue()); skipws();
+      if(i<n && text[i]===","){ i++; continue; }
+      if(i<n && text[i]==="]"){ i++; break; }
+      break;
+    }
+    return {type:"list", items, start, end:i};
+  }
+  function parseString(){
+    const start=i; i++; let s="";
+    while(i<n){
+      if(text[i]==="$"){ i+=2; continue; }
+      if(text[i]==="'"){ i++; break; }
+      s+=text[i]; i++;
+    }
+    return {type:"string", value:s, start, end:i};
+  }
+  function parseScalar(){
+    const start=i;
+    while(i<n && ",[]' \t\r\n".indexOf(text[i])<0) i++;
+    return {type:"scalar", value:text.slice(start,i), start, end:i};
+  }
+  return parseValue();
+}
+function plainOf(node){
+  if(!node) return node;
+  if(node.type==="list") return node.items.map(plainOf);
+  return node.value;
+}
+/* Same field layout as parseArrayMgmt, plus a *Edit span for each editable
+   value: {start,end} character offsets in the FULL source text (not just the
+   balanced substring), ready to splice a replacement literal into directly. */
+function parseArrayMgmtEditable(txt, tag){
+  const found = extractBalancedPos(txt, tag, "FA_DataMgmt");
+  if(found===null) return {found:false};
+  const root = parseInitializerPos(found.text);
+  if(root.type!=="list") return {found:false};
+  const plain = root.items.map(plainOf);
+  let ci=-1;
+  for(let k=0;k<plain.length;k++){ if(isNumericList(plain[k],16)){ ci=k; break; } }
+  if(ci<0) return {found:false};
+  const abs = node => ({start: found.start+node.start, end: found.start+node.end});
+
+  const curveNode = root.items[ci];
+  const curve = curveNode.items.map(it => it.value);
+  const curveEdit = curveNode.items.map(abs);
+
+  let purge=null, purgeEdit=null;
+  if(ci>=2 && isNumericList(plain[ci-2])){
+    purge = plain[ci-2][0];
+    purgeEdit = abs(root.items[ci-2].items[0]);
+  }
+  let lightoff=null, lightoffEdit=null;
+  if(ci>=1 && isNumericList(plain[ci-1])){
+    lightoff = plain[ci-1][0];
+    lightoffEdit = abs(root.items[ci-1].items[0]);
+  }
+  return {found:true, curve, purge, lightoff, curveEdit, purgeEdit, lightoffEdit};
+}
+
+function o2TrimEnabled(txt){
+  const raw = extractBalanced(txt, "DesiredO2", "FuelAirCurveData");
+  if(raw===null) return false;
+  const parsed = parseInitializer(raw);
+  if(!Array.isArray(parsed) || parsed.length===0) return false;
+  const cfg = parsed[parsed.length-1];
+  if(!Array.isArray(cfg) || cfg.length===0) return false;
+  const packed = parseInt(parseFloat(cfg[0]));
+  return ((packed>>3)&1)===1;
+}
+
+function fuelTypeNames(txt){
+  const names={};
+  const m = /FuelTypeNames\s*:\s*String_20\[\d+\]\s*\(/.exec(txt);
+  if(!m) return names;
+  const j = txt.indexOf(") :=", m.index); if(j<0) return names;
+  const block = txt.slice(j, txt.indexOf(";", j));
+  const re = /\[\s*\d+\s*,\s*'([^']*)'/g; let mm, idx=0;
+  while((mm=re.exec(block))!==null){ names[idx]= mm[1].split("$00")[0].trim(); idx++; }
+  return names;
+}
+
+function extractMultiFuel(txt){
+  const tn = fuelTypeNames(txt);
+  const o2en = o2TrimEnabled(txt);
+  const fuels=[];
+  for(const num of [1,2]){
+    const cols={};
+    for(const col in COLUMN_SUFFIX) cols[col] = parseArrayMgmtEditable(txt, "ArrayMgmt_F"+num+COLUMN_SUFFIX[col]);
+    fuels.push({number:num, name: tn[num-1] || ("Fuel "+num), cols});
+  }
+  return {o2en, fuels, controller: (txt.match(/CONTROLLER\s+(\w+)/)||[])[1] || "", kind:"l5k" };
+}
+
+function cell(col, label, cc){
+  if(!cc || !cc.found) return "";
+  if(label==="purge"){
+    // Fuel + O2 purge are blank, as is any column with no purge tag.
+    if(col==="Fuel Act1" || col==="Fuel" || col==="O2" ||
+       cc.purge===null || cc.purge===undefined) return "";
+    return fmt(cc.purge);
+  }
+  if(label==="LtOff"){
+    if(col==="O2" || cc.lightoff===null || cc.lightoff===undefined) return "";
+    return fmt(cc.lightoff);
+  }
+  const i = parseInt(label)-1;
+  return fmt((i>=0 && i<cc.curve.length) ? cc.curve[i] : null);
+}
+
+/* The write-back target for one cell, or null if the cell isn't editable —
+   mirrors cell()'s blank-cell rules exactly, so "shown" and "editable" always
+   agree. For L5K this is a {start,end} character span; for ACD it's an array
+   of 1 or 2 absolute byte offsets into the decompressed Comps.Dat (2 when the
+   firetube "double curve" signature means a value is stored twice). */
+function cellEdit(col, label, cc){
+  if(!cc || !cc.found) return null;
+  if(label==="purge"){
+    if(col==="Fuel Act1" || col==="Fuel" || col==="O2" ||
+       cc.purge===null || cc.purge===undefined) return null;
+    return cc.purgeEdit || null;
+  }
+  if(label==="LtOff"){
+    if(col==="O2" || cc.lightoff===null || cc.lightoff===undefined) return null;
+    return cc.lightoffEdit || null;
+  }
+  const i = parseInt(label)-1;
+  if(!(cc.curveEdit && i>=0 && i<cc.curveEdit.length)) return null;
+  return cc.curveEdit[i] || null;
+}
+
+/* ---- rendering -------------------------------------------------------- */
+// The file currently on screen, kept around so Edit/Write Curve can get back
+// to the parsed data (and, for ACD, the decompressed Comps.Dat + container)
+// without re-reading the file.
+let currentFile = null;
+
+function render(data, filename){
+  currentFile = {data, filename, editing:false};
+
+  // Firetube files use the default column set and 16 points; water-tube files
+  // supply their own (Air / Fuel / FGR / Fresh Air / O2, 11 points).
+  const base = data.columnOrder || ["Air","Fuel Act1","FGR","VFD","O2"];
+  const columns = base.filter(c => c!=="O2");
+  if(data.o2en && base.indexOf("O2")>=0) columns.push("O2");
+  const ROWS = data.rowLabels || ROW_LABELS;
+
+  const wrap = document.getElementById("tables");
+  wrap.innerHTML = "";
+  data.fuels.forEach((fuel, fuelIdx) => {
+    const box = document.createElement("div");
+    box.className = "fueltable";
+
+    const banner = document.createElement("div");
+    banner.className = "banner";
+    banner.textContent = "Fuel " + fuel.number + " — " + fuel.name;
+    box.appendChild(banner);
+
+    const tbl = document.createElement("table");
+    let html = "<tr><th class='lbl'></th>";
+    columns.forEach((c,idx)=>{ html += "<th class='"+(idx===0?"air":"")+"'>"+c+"</th>"; });
+    html += "</tr>";
+    for(const label of ROWS){
+      const sect = (label==="purge"||label==="LtOff") ? " class='section'" : "";
+      html += "<tr"+sect+"><td class='lbl'>"+label+"</td>";
+      columns.forEach((c,idx)=>{
+        const cc = fuel.cols[c];
+        const val = cell(c,label,cc);
+        const editable = cellEdit(c,label,cc) !== null;
+        const cls = (idx===0?"air":"") + (editable?" editable":"");
+        html += "<td class='"+cls+"'"
+              + (editable ? " data-fuel-idx='"+fuelIdx+"' data-col='"+c+"' data-label='"+label+"'" : "")
+              + ">"+"<span class='v'>"+val+"</span></td>";
+      });
+      html += "</tr>";
+    }
+    tbl.innerHTML = html;
+    box.appendChild(tbl);
+    wrap.appendChild(box);
+  });
+
+  document.getElementById("status").textContent =
+    filename + (data.controller ? "  •  controller: " + data.controller : "") + "  •  both fuels";
+
+  const o2note = data.o2note || (data.o2en
+    ? "O2 trim is enabled (DesiredO2.Cfg.O2Curve = 1) — O2 column shown."
+    : "O2 trim is disabled (DesiredO2.Cfg.O2Curve = 0) — O2 column omitted.");
+  document.getElementById("notes").className = "notes";
+  document.getElementById("notes").innerHTML = "• " + o2note;
+
+  document.getElementById("editBtn").style.display = "";
+  document.getElementById("writeBtn").style.display = "none";
+  document.getElementById("cancelBtn").style.display = "none";
+  document.getElementById("editWarn").textContent = "";
+  document.getElementById("editbar").style.display = "flex";
+  document.getElementById("writeStatus").textContent = "";
+  document.getElementById("writeStatus").className = "";
+}
+
+/* ---- ACD reading (binary) --------------------------------------------- */
+async function gunzip(u8){
+  const ds = new DecompressionStream("gzip");
+  const ab = await new Response(new Blob([u8]).stream().pipeThrough(ds)).arrayBuffer();
+  return new Uint8Array(ab);
+}
+const _u16=(dv,o)=>dv.getUint16(o,true), _u32=(dv,o)=>dv.getUint32(o,true);
+const _i32=(dv,o)=>dv.getInt32(o,true), _f32=(dv,o)=>dv.getFloat32(o,true);
+
+// The comps record header shrank by 4 bytes between older (V20) and newer
+// (V35) ACDs, so the tag name sits at a different offset from the record
+// marker. In BOTH layouts object_id = name-8 and parent_id = name-4, so we
+// only detect the name offset (extra candidates cover other versions).
+const _NAME_OFFSETS=[30,26,34,38,22];
+function _readName(dv,nameAbs){
+  let name="",q=nameAbs,end=nameAbs+124;
+  while(q<end){const c=_u16(dv,q);q+=2;if(c===0)break;name+=String.fromCharCode(c);}
+  return name;
+}
+function _walkStart(dv){ const prr=_u32(dv,_u32(dv,12)+18); return prr+_u32(dv,prr+2); }
+function _detectNameOffset(u8,dv,start,no){
+  let best=30,bestScore=-1;
+  for(const off of _NAME_OFFSETS){
+    let p=start,ok=0,seen=0;
+    for(let count=0;count<no&&seen<400&&p+off+4<u8.length;count++){
+      const outer=_u32(dv,p+2); if(outer<10||p+outer>u8.length+8) break;
+      if(_u16(dv,p)===0xfafa){seen++; const c0=u8[p+off];
+        if(u8[p+off+1]===0 && ((c0>=65&&c0<=90)||(c0>=97&&c0<=122)||c0===36||c0===95)) ok++;}
+      p+=outer;
+    }
+    if(seen>10 && ok>bestScore){bestScore=ok;best=off;}
+  }
+  return best;
+}
+function acdWalkComps(u8){
+  const dv=new DataView(u8.buffer,u8.byteOffset,u8.byteLength);
+  const no=_u32(dv,20), start=_walkStart(dv);
+  const nameOff=_detectNameOffset(u8,dv,start,no);
+  const comps={}, byId={};
+  let p=start, count=0;
+  while(count<no && p+6<=u8.length){
+    const id=_u16(dv,p), outer=_u32(dv,p+2);
+    if(outer<10 || p+outer>u8.length+8) break;
+    if(id===0xfafa && p+nameOff+124<=u8.length){
+      const nameAbs=p+nameOff;
+      const object_id=_u32(dv,nameAbs-8), parent_id=_u32(dv,nameAbs-4);
+      const name=_readName(dv,nameAbs);
+      const buffer=u8.subarray(nameAbs+124, p+outer);
+      comps[name]={object_id,parent_id,buffer}; byId[object_id]={name,parent_id,buffer};
+    }
+    p+=outer; count++;
+  }
+  return {comps, byId};
+}
+function _decodeDesired(buf){
+  const dv=new DataView(buf.buffer,buf.byteOffset,buf.byteLength);
+  for(let off=0; off<buf.length-136; off++){
+    const ln=_u32(dv,off); if(ln<1||ln>20) continue;
+    let ok=true; for(let k=0;k<ln;k++){const c=buf[off+4+k]; if(c<32||c>=127){ok=false;break;}}
+    if(!ok) continue;
+    const c0=buf[off+4]; if(!((c0>=65&&c0<=90)||(c0>=97&&c0<=122))) continue;
+    const curve=[]; let good=true;
+    for(let k=0;k<16;k++){const v=_f32(dv,off+32+4*k); if(!(isFinite(v)&&v>-1e5&&v<1e5)){good=false;break;} curve.push(v);}
+    if(!good) continue;
+    return {purge:_f32(dv,off+24), lightoff:_f32(dv,off+28), curve, cfg:_i32(dv,off+132)};
+  }
+  return null;
+}
+function _decodeArray(buf){
+  const dv=new DataView(buf.buffer,buf.byteOffset,buf.byteLength);
+  const base=buf.byteOffset;   // absolute offset into Comps.Dat — buf is a
+                                // subarray view, never a copy, so this is exact.
+  let best=null, bs=-1;
+  for(let i=16;i<buf.length-128;i++){
+    const c0=_f32(dv,i); if(!(isFinite(c0)&&Math.abs(c0)>0.05)) continue;
+    const c1=[]; let good=true;
+    for(let k=0;k<16;k++){const v=_f32(dv,i+4*k); if(!(isFinite(v)&&v>-1e5&&v<1e5)){good=false;break;} c1.push(v);}
+    if(!good) continue;
+    let dbl=true; for(let k=0;k<16;k++){if(Math.abs(c1[k]-_f32(dv,i+64+4*k))>=1e-3){dbl=false;break;}}
+    if(!dbl) continue;
+    const p0=_f32(dv,i-16),p1=_f32(dv,i-12),l0=_f32(dv,i-8),l1=_f32(dv,i-4);
+    if(!(Math.abs(p0-p1)<1e-3 && Math.abs(l0-l1)<1e-3)) continue;
+    let score=0; for(const x of c1) if(Math.abs(x)>0.1) score++;
+    if(score>bs){
+      bs=score;
+      // Firetube stores every curve value twice (Ref_Data + a working copy);
+      // both copies must be patched together or the "double curve" signature
+      // this decoder relies on breaks on the very next read of the file.
+      const curveEdit=[];
+      for(let k=0;k<16;k++) curveEdit.push([base+i+4*k, base+i+64+4*k]);
+      best={purge:p0, lightoff:l0, curve:c1,
+            purgeEdit:[base+i-16, base+i-12],
+            lightoffEdit:[base+i-8, base+i-4],
+            curveEdit};
+    }
+  }
+  return best;
+}
+/* ---- water-tube layout (characterizer arrays) --------------------------
+   Water-tube programs don't use FA_DataMgmt tags at all. Each actuator has a
+   characterizer: an X/Y pair of REAL arrays per fuel. X is the firing-rate
+   breakpoint axis and is ignored — the commissioned positions are the Y
+   arrays. Purge and light-off are separate scalar REAL tags.               */
+const WT_FUELS = [
+  {key:"gas", title:"Gas",
+   aliases:["Gas","NaturalGas","NatGas","NG"]},
+  {key:"oil", title:"Number 2 Oil",
+   aliases:["Oil","No2Oil","No2_Oil","NO2Oil","No2FuelOil","Oil2","FuelOil"]}
+];
+const WT_COLUMNS = ["Air","Fuel","FGR","Fresh Air","O2"];
+const WT_TAGS = {
+  "Air":       [["AirCharacterizer_{F}_Y","FDFanAirCharacterizer_{F}_Y","CombustionAirCharacterizer_{F}_Y"],
+                ["FDFanAirDamperPurgePosition","AirDamperPurgePosition","PurgePosition"],
+                ["FDFanAirDamperLightoffPosition_{F}","AirDamperLightoffPosition_{F}","AirDamperLightoff_{F}"]],
+  "Fuel":      [["{F}Characterizer_Y","{F}ValveCharacterizer_Y","FuelCharacterizer_{F}_Y"],
+                [],
+                ["{F}ValveLightoff","{F}ValveLightoffPosition","FuelValveLightoff_{F}"]],
+  "FGR":       [["FGRCharacterizer_{F}_Y"],
+                ["FGRDamperPurgePosition","FGRPurgePosition"],
+                ["FGRDamperLightoff_{F}","FGRDamperLightoffPosition_{F}"]],
+  "Fresh Air": [["FreshAirCharacterizer_{F}_Y"],
+                ["FreshAirDamperPurgePosition","FreshAirPurgePosition"],
+                ["FreshAirDamperLightoff_{F}","FreshAirDamperLightoffPosition_{F}"]],
+  "O2":        [["OxygenTrimCharacterizer_{F}_Y","O2TrimCharacterizer_{F}_Y","OxygenCharacterizer_{F}_Y"],
+                [], []]
+};
+// Fresh air is optional — when the loop is off the column is dropped.
+// Enable-sense tags only: FreshAirLoopDisabled is the inverse (and a TIMER in
+// at least one project), so it is deliberately not in this list.
+const FRESH_AIR_ENABLE_TAGS=["FreshAirDamperLoopEnabled","FreshAirLoopEnabled","FreshAirLoopEnable","FreshAirDamperEnable","FreshAirEnable"];
+// O2 trim state. This tag is inverted: in standby means trim is NOT running,
+// so 0 = enabled and 1 = disabled.
+const O2_STANDBY_TAGS=["OxygenTrimInStandby","O2TrimInStandby","OxygenTrimStandby"];
+function wtCandidates(templates, fuel){
+  const out=[];
+  for(const tpl of templates){
+    if(tpl.indexOf("{F}")<0){ out.push(tpl); continue; }
+    for(const a of fuel.aliases) out.push(tpl.replace("{F}", a));
+  }
+  return out;
+}
+function hasCharacterizers(comps){
+  for(const k in comps) if(/haracterizer/.test(k) && /_Y$/.test(k)) return true;
+  return false;
+}
+/* A tag value record ends with <u32 byte-count><that many bytes of float32>. */
+/* Candidate [offset,length] value blocks, the one nearest the end first.
+   Scanning BACKWARDS matters: unrelated header bytes earlier in the record can
+   coincidentally satisfy the length equation (one 421-byte BOOL record has a
+   spurious match at offset 74 claiming a 343-byte payload), and the real block
+   is always the one at the end. */
+function wtPayloads(buf){
+  const dv=new DataView(buf.buffer,buf.byteOffset,buf.byteLength), n=buf.length;
+  const out=[];
+  for(let k=n-4;k>=0;k--) if(_u32(dv,k)===n-k-4) out.push([k+4, n-k-4]);
+  return out;
+}
+function wtDecodeReals(buf){
+  if(!buf) return null;
+  const dv=new DataView(buf.buffer,buf.byteOffset,buf.byteLength);
+  for(const [off,ln] of wtPayloads(buf)){
+    if(ln<4 || (ln%4)) continue;
+    const vals=[]; let ok=true;
+    for(let i=0;i<ln/4;i++){const v=_f32(dv,off+4*i); if(!(isFinite(v)&&v>-1e9&&v<1e9)){ok=false;break;} vals.push(v);}
+    if(ok) return vals;
+  }
+  return null;
+}
+/* Same as wtDecodeReals, but also returns each value's absolute byte offset
+   into the decompressed Comps.Dat (not just local to buf), for write-back.
+   buf is always a subarray view sharing Comps.Dat's ArrayBuffer (never a
+   copy), so buf.byteOffset IS that absolute offset. */
+function wtDecodeRealsEdit(buf){
+  if(!buf) return null;
+  const dv=new DataView(buf.buffer,buf.byteOffset,buf.byteLength);
+  for(const [off,ln] of wtPayloads(buf)){
+    if(ln<4 || (ln%4)) continue;
+    const vals=[], offsets=[]; let ok=true;
+    for(let i=0;i<ln/4;i++){
+      const v=_f32(dv,off+4*i); if(!(isFinite(v)&&v>-1e9&&v<1e9)){ok=false;break;}
+      vals.push(v); offsets.push(buf.byteOffset+off+4*i);
+    }
+    if(ok) return {values:vals, offsets};
+  }
+  return null;
+}
+/* Read a scalar as an on/off flag — true, false, or null if unreadable.
+   Payload bytes are compared against zero rather than decoded to a number, so
+   it works whichever type the tag is. That matters both ways: a BOOL stores a
+   single byte (a 4-byte read misses it entirely), and decoding an integer tag
+   as float32 would be wrong — a DINT of 1 reads as 1.4e-45. */
+const FLAG_WIDTHS=[1,2,4,8];           // BOOL, INT, DINT/REAL, LINT
+function wtDecodeFlag(buf){
+  if(!buf) return null;
+  for(const [off,ln] of wtPayloads(buf)){
+    if(FLAG_WIDTHS.indexOf(ln)<0) continue;
+    for(let i=0;i<ln;i++) if(buf[off+i]!==0) return true;
+    return false;
+  }
+  return null;
+}
+function wtFlag(lookup, names){
+  for(const nm of names){
+    const v=wtDecodeFlag(lookup(nm));
+    if(v!==null) return [v, nm];
+  }
+  return [null, null];
+}
+
+function wtExtract(lookup){
+  const fuels=[]; let points=0; const o2Tags=[];
+
+  // Fresh air loop off -> drop the column entirely. If the tag can't be read
+  // the column stays: hiding a commissioned curve is worse than showing one
+  // the boiler doesn't use.
+  const [freshAirOn] = wtFlag(lookup, FRESH_AIR_ENABLE_TAGS);
+  const COLUMNS = WT_COLUMNS.filter(c => !(c==="Fresh Air" && freshAirOn===false));
+
+  for(let n=0;n<WT_FUELS.length;n++){
+    const fuel=WT_FUELS[n], cols={};
+    for(const col of COLUMNS){
+      const [curveT, purgeT, ltoffT] = WT_TAGS[col];
+      // Alias lists are priority-ordered — the first name that resolves wins.
+      let curve=null, curveOffsets=null, curveTag=null;
+      for(const nm of wtCandidates(curveT, fuel)){
+        const v=wtDecodeRealsEdit(lookup(nm));
+        if(v && v.values.length>1){ curve=v.values; curveOffsets=v.offsets; curveTag=nm; break; }
+      }
+      if(!curve){ cols[col]={found:false}; continue; }
+      points=Math.max(points, curve.length);
+      // Each fuel trims off its own characterizer.
+      if(col==="O2" && curve.some(v=>Math.abs(v)>1e-6)) o2Tags.push(fuel.title+" from "+curveTag);
+      const scalar = tpls => {
+        for(const nm of wtCandidates(tpls, fuel)){
+          const v=wtDecodeRealsEdit(lookup(nm));
+          if(v && v.values.length) return {value:v.values[0], offset:v.offsets[0]};
+        }
+        return {value:null, offset:null};
+      };
+      const purgeR = scalar(purgeT), ltoffR = scalar(ltoffT);
+      cols[col]={
+        found:true, purge:purgeR.value, lightoff:ltoffR.value, curve,
+        purgeEdit: purgeR.offset!==null ? [purgeR.offset] : null,
+        lightoffEdit: ltoffR.offset!==null ? [ltoffR.offset] : null,
+        curveEdit: curveOffsets.map(o=>[o]),
+      };
+    }
+    fuels.push({number:n+1, name:fuel.title, cols});
+  }
+  const rowLabels=["purge","LtOff"];
+  for(let i=1;i<=points;i++) rowLabels.push(String(i));
+  // O2 trim comes from the standby tag, which is inverted: 0 = enabled.
+  // Falls back to "is there any characterizer data" if the tag is missing.
+  const [standby] = wtFlag(lookup, O2_STANDBY_TAGS);
+  const o2en = (standby!==null) ? !standby : (o2Tags.length>0);
+
+  return {
+    o2en, fuels, controller:"",
+    columnOrder:COLUMNS, rowLabels,
+    o2note:"Water-tube program. O2 trim "+(o2en?"enabled.":"disabled."),
+    kind:"acd",
+  };
+}
+
+// compsDat must already be decompressed, and must be the actual working
+// buffer (not a copy) — every *Edit offset recorded below is an absolute
+// index into it, and Write Curve patches compsDat.buffer directly by those
+// offsets later.
+function extractMultiFuelACD(compsDat){
+  const {comps, byId} = acdWalkComps(compsDat);
+  const refsOf = tag => {
+    const d=comps[tag]; if(!d) return [];
+    const dv=new DataView(d.buffer.buffer,d.buffer.byteOffset,d.buffer.byteLength);
+    const out=[], seen=new Set();
+    for(let o=0;o<d.buffer.length-4;o++){const oid=_u32(dv,o); if(byId[oid]&&!seen.has(oid)){seen.add(oid);out.push(oid);}}
+    return out;
+  };
+
+  // Water-tube programs take a completely different path.
+  if(hasCharacterizers(comps)){
+    // A tag definition points at a "$hash$" record — that one holds the value.
+    const wtLookup = tag => {
+      for(const oid of refsOf(tag)){
+        const nm = byId[oid].name;
+        if(nm.charAt(0)==="$" && nm.charAt(nm.length-1)==="$") return byId[oid].buffer;
+      }
+      return null;
+    };
+    return wtExtract(wtLookup);
+  }
+
+  let vp=null, o2dec=null;
+  for(const oid of refsOf("DesiredO2")){
+    const dec=_decodeDesired(byId[oid].buffer);
+    if(dec && Math.abs(dec.curve[0])>0.01){ vp=byId[oid].parent_id; o2dec=dec; break; }
+  }
+  const o2en = !!(o2dec && ((o2dec.cfg>>3)&1));
+  const valueRec = tag => {
+    for(const oid of refsOf(tag)) if(vp===null || byId[oid].parent_id===vp) return byId[oid].buffer;
+    return null;
+  };
+  let names=[]; const ftn=valueRec("FuelTypeNames");
+  if(ftn){
+    const txt=Array.from(ftn).map(c=>(c>=32&&c<127)?String.fromCharCode(c):"\n").join("");
+    for(const m of txt.matchAll(/[A-Za-z0-9#][A-Za-z0-9 #]{2,19}/g)) names.push(m[0]);
+  }
+  const fuels=[];
+  for(const n of [1,2]){
+    const cols={};
+    for(const col in COLUMN_SUFFIX){
+      const rec=valueRec("ArrayMgmt_F"+n+COLUMN_SUFFIX[col]);
+      const dec=rec?_decodeArray(rec):null;
+      cols[col]= dec ? {found:true, purge:dec.purge, lightoff:dec.lightoff, curve:dec.curve,
+                         purgeEdit:dec.purgeEdit, lightoffEdit:dec.lightoffEdit, curveEdit:dec.curveEdit}
+                     : {found:false};
+    }
+    fuels.push({number:n, name: names[n-1] || ("Fuel "+n), cols});
+  }
+  return {o2en, fuels, controller: (comps["Controller"]&&comps["Controller"].name)||"", kind:"acd" };
+}
+
+/* ---- ACD container (rebuild-on-write) ----------------------------------
+   The whole ACD is a flat list of named streams laid end-to-end, indexed by
+   a trailing table: [name (UTF-16, null-terminated, 520-byte field)]
+   [u32 compressed length][u32 file offset], repeated once per stream, then
+   [u32 stream count][4 opaque trailer bytes — a saved build number, unrelated
+   to layout]. Every stream's offset is just the running sum of the lengths
+   before it, so writing back only means: recompress the one stream that
+   changed (Comps.Dat), recompute every offset, and copy every other stream's
+   bytes through untouched. Verified by a round-trip test: decompress,
+   recompress unchanged, rebuild, and re-parse — byte-identical decode. */
+function acdReadContainer(u8){
+  const dv=new DataView(u8.buffer,u8.byteOffset,u8.byteLength);
+  const size=u8.length, noFiles=_u32(dv,size-8);
+  const tail = u8.slice(size-4, size);
+  let p=size-noFiles*528-8;
+  const entries=[];
+  for(let k=0;k<noFiles;k++){
+    let name="",q=p; while(true){const c=_u16(dv,q);q+=2;if(c===0)break;name+=String.fromCharCode(c);}
+    const flen=_u32(dv,p+520), foff=_u32(dv,p+524);
+    entries.push({name, data:u8.slice(foff,foff+flen)});
+    p+=528;
+  }
+  return {entries, tail};
+}
+function acdBuildContainer(entries, tail){
+  let total=0;
+  for(const e of entries) total += e.data.length;
+  total += entries.length*528 + 4 + tail.length;
+  const out = new Uint8Array(total);       // zero-filled: pads name fields
+  const dv = new DataView(out.buffer);
+  const offsets=[]; let pos=0;
+  for(const e of entries){ offsets.push(pos); out.set(e.data,pos); pos+=e.data.length; }
+  for(let k=0;k<entries.length;k++){
+    const e=entries[k], entryStart=pos;
+    let np=entryStart;
+    for(let ci=0; ci<e.name.length; ci++){ dv.setUint16(np, e.name.charCodeAt(ci), true); np+=2; }
+    dv.setUint16(np,0,true);
+    dv.setUint32(entryStart+520, e.data.length, true);
+    dv.setUint32(entryStart+524, offsets[k], true);
+    pos += 528;
+  }
+  dv.setUint32(pos, entries.length, true); pos+=4;
+  out.set(tail, pos);
+  return out;
+}
+async function gzip(u8){
+  const cs = new CompressionStream("gzip");
+  const ab = await new Response(new Blob([u8]).stream().pipeThrough(cs)).arrayBuffer();
+  return new Uint8Array(ab);
+}
+
+/* ---- editing ------------------------------------------------------------
+   Edit turns every cell that has a write-back target (per cellEdit()) into a
+   text input. Write Curve reads back only the ones that actually changed,
+   validates them, and produces a brand-new file — the original on disk is
+   never touched. Cancel discards without writing. */
+function escapeHtml(s){
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function updatedFilename(name){
+  const m = /^(.*)(\.[^.]+)$/.exec(name);
+  return m ? m[1] + "_updated" + m[2] : name + "_updated";
+}
+function downloadBytes(bytes, filename, mime){
+  const blob = new Blob([bytes], {type: mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+}
+function setWriteStatus(msg, isError){
+  const el = document.getElementById("writeStatus");
+  el.textContent = msg;
+  el.className = isError ? "err" : "ok";
+}
+
+function enterEditMode(){
+  currentFile.editing = true;
+  document.getElementById("editBtn").style.display = "none";
+  document.getElementById("writeBtn").style.display = "";
+  document.getElementById("cancelBtn").style.display = "";
+  document.getElementById("editWarn").textContent =
+    "Writes a new “_updated” file — the original is never touched. Verify the result in Studio 5000 before using it on a live boiler.";
+  setWriteStatus("", false);
+  document.querySelectorAll("#tables td.editable").forEach(td=>{
+    const span = td.querySelector(".v");
+    const val = span ? span.textContent : "";
+    td.innerHTML = "";
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.inputMode = "decimal"; inp.autocomplete = "off";
+    inp.value = val; inp.defaultValue = val;
+    inp.addEventListener("input", ()=>{
+      const dirty = inp.value.trim() !== inp.defaultValue.trim();
+      inp.classList.toggle("dirty", dirty);
+      const n = Number(inp.value.trim());
+      inp.classList.toggle("bad", inp.value.trim()!=="" && !isFinite(n));
+    });
+    td.appendChild(inp);
+  });
+}
+function exitEditMode(keepEdits){
+  document.querySelectorAll("#tables td.editable input").forEach(inp=>{
+    const td = inp.parentElement;
+    const val = keepEdits ? inp.value.trim() : inp.defaultValue;
+    td.innerHTML = "<span class='v'>"+escapeHtml(val)+"</span>";
+  });
+  currentFile.editing = false;
+  document.getElementById("editBtn").style.display = "";
+  document.getElementById("writeBtn").style.display = "none";
+  document.getElementById("cancelBtn").style.display = "none";
+  document.getElementById("editWarn").textContent = "";
+}
+function collectDirtyEdits(){
+  const dirty = [];
+  document.querySelectorAll("#tables td.editable").forEach(td=>{
+    const inp = td.querySelector("input"); if(!inp) return;
+    const text = inp.value.trim();
+    if(text === inp.defaultValue.trim()) return;
+    dirty.push({
+      fuelIdx: +td.dataset.fuelIdx, col: td.dataset.col, label: td.dataset.label,
+      text, num: text==="" ? NaN : Number(text),
+    });
+  });
+  return dirty;
+}
+
+async function writeAcd(dirty){
+  const compsDat = currentFile.compsDat;
+  const dv = new DataView(compsDat.buffer);
+  for(const d of dirty){
+    const cc = currentFile.data.fuels[d.fuelIdx].cols[d.col];
+    const target = cellEdit(d.col, d.label, cc);   // same lookup used to render
+    if(!target) continue;                          // defensive; shouldn't happen
+    for(const off of target) dv.setFloat32(off, d.num, true);
+  }
+  const newComps = await gzip(compsDat);
+  const entries = currentFile.container.entries.map(en =>
+    en.name==="Comps.Dat" ? {name:en.name, data:newComps} : en);
+  const rebuilt = acdBuildContainer(entries, currentFile.container.tail);
+
+  const outName = updatedFilename(currentFile.filename);
+  downloadBytes(rebuilt, outName, "application/octet-stream");
+  setWriteStatus("Wrote " + outName + " (" + dirty.length + " value" + (dirty.length===1?"":"s")
+    + " changed). This is a new file — the original is untouched. Open it in Studio 5000 and verify before using it on a live boiler.", false);
+}
+
+function writeL5k(dirty){
+  const edits = [];
+  for(const d of dirty){
+    const cc = currentFile.data.fuels[d.fuelIdx].cols[d.col];
+    const span = cellEdit(d.col, d.label, cc);
+    if(!span) continue;
+    edits.push({start: span.start, end: span.end, text: d.text});
+  }
+  edits.sort((a,b)=>b.start-a.start);   // splice from the end so earlier spans stay valid
+  let text = currentFile.text;
+  for(const e of edits) text = text.slice(0,e.start) + e.text + text.slice(e.end);
+
+  const outName = updatedFilename(currentFile.filename);
+  downloadBytes(new TextEncoder().encode(text), outName, "text/plain");
+  setWriteStatus("Wrote " + outName + " (" + dirty.length + " value" + (dirty.length===1?"":"s")
+    + " changed). This is a new file — the original is untouched. Re-import it into Studio 5000 and verify before using it on a live boiler.", false);
+}
+
+document.getElementById("editBtn").addEventListener("click", ()=>{
+  if(currentFile) enterEditMode();
+});
+document.getElementById("cancelBtn").addEventListener("click", ()=>{
+  exitEditMode(false);
+  setWriteStatus("", false);
+});
+document.getElementById("writeBtn").addEventListener("click", async ()=>{
+  if(!currentFile) return;
+  const dirty = collectDirtyEdits();
+  if(dirty.length===0){ setWriteStatus("No changes to write.", false); return; }
+  if(dirty.some(d=>!isFinite(d.num))){
+    setWriteStatus("One or more edited values aren't valid numbers — nothing written.", true);
+    return;
+  }
+  const btn = document.getElementById("writeBtn");
+  btn.disabled = true;
+  try{
+    if(currentFile.data.kind === "acd") await writeAcd(dirty);
+    else writeL5k(dirty);
+    exitEditMode(true);
+  }catch(err){
+    setWriteStatus("Write failed: " + err.message, true);
+  }finally{
+    btn.disabled = false;
+  }
+});
+
+/* ---- file intake ------------------------------------------------------ */
+function loadFile(file){
+  const status = document.getElementById("status");
+  const isAcd = /\.acd$/i.test(file.name);
+  const reader = new FileReader();
+  reader.onerror = () => { status.textContent = "Could not read the file."; };
+
+  if(isAcd){
+    status.textContent = "Decrypting ACD…  (this takes a moment)";
+    reader.onload = async e => {
+      try{
+        const raw = new Uint8Array(e.target.result);
+        const container = acdReadContainer(raw);
+        const compsEntry = container.entries.find(en => en.name === "Comps.Dat");
+        if(!compsEntry) throw new Error("Comps.Dat not found — not a valid ACD?");
+        let compsDat = compsEntry.data;
+        if(compsDat[0]===0x1f && compsDat[1]===0x8b) compsDat = await gunzip(compsDat);
+        const data = extractMultiFuelACD(compsDat);
+        if(!data.fuels.some(f=>Object.values(f.cols).some(c=>c.found))){
+          document.getElementById("tables").innerHTML = "";
+          document.getElementById("notes").innerHTML = "";
+          document.getElementById("editbar").style.display = "none";
+          status.textContent = "Current boiler is configured with linkage, not actuators.  No curve stored";
+          return;
+        }
+        render(data, file.name);
+        // compsDat must stay the SAME buffer that every *Edit offset points
+        // into — Write Curve patches it directly, in place, by those offsets.
+        currentFile.compsDat = compsDat;
+        currentFile.container = container;
+      }catch(err){
+        status.textContent = "Could not read ACD: " + err.message;
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    return;
+  }
+
+  status.textContent = "Reading " + file.name + " …";
+  reader.onload = e => {
+    try{
+      const text = e.target.result;
+      const data = extractMultiFuel(text);
+      if(!data.fuels.some(f=>Object.values(f.cols).some(c=>c.found))){
+        status.textContent = "No ArrayMgmt_F* curve tags found — is this the right L5K export?";
+        return;
+      }
+      render(data, file.name);
+      currentFile.text = text;   // original source, for splicing edits back in
+    }catch(err){
+      status.textContent = "Could not parse file: " + err.message;
+    }
+  };
+  reader.readAsText(file);
+}
+
+const drop = document.getElementById("drop");
+const fileInput = document.getElementById("file");
+drop.addEventListener("click", ()=> fileInput.click());
+fileInput.addEventListener("change", e=>{ if(e.target.files[0]) loadFile(e.target.files[0]); });
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e=>{ if(e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+window.addEventListener("dragover", e=>e.preventDefault());
+window.addEventListener("drop", e=>e.preventDefault());
+</script>
+</body>
+</html>

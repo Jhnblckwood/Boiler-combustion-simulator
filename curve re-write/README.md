@@ -1,0 +1,131 @@
+# Curve Re-Write
+
+A single file, `Curve Editor.html` — drop in a Studio 5000 `.ACD` or `.L5K`,
+the curve table reads out exactly like the other readers in this repo, and now
+you can **Edit** the values and **Write Curve** to produce a new file with the
+edits baked in.
+
+No install, no server: everything runs in the browser, the same way the other
+`Fuel Curve Reader.html` tools do. Reading is unchanged from
+`fuel curve reader acd wt` — firetube (`ArrayMgmt_F*`) and water-tube
+(`*Characterizer_*_Y`) programs, both fuels, `.ACD` and `.L5K`.
+
+## How editing works
+
+1. Drop a file in. The table reads out as usual.
+2. **Edit** — every cell that has a real underlying tag turns into a text
+   box, pre-filled with its current value. Blank cells (no purge tag on the
+   fuel valve, no O2 light-off, a dropped column) stay blank — there's nothing
+   to write back to.
+3. Type new values into whichever cells need to change. Only cells you
+   actually touch are written; everything else is carried through byte-for-byte
+   from the original file, untouched.
+4. **Write Curve** — validates every edited cell is a real number (if any
+   aren't, nothing is written and it tells you which), then downloads a new
+   file named `<original name>_updated.<ext>`. **The original file is never
+   modified** — the browser can't overwrite it even if it wanted to; it can
+   only ever hand you a new file to save.
+5. **Cancel** discards the edits and goes back to the read-only view.
+
+## Before you trust the output
+
+**Open every `_updated.ACD` in Studio 5000 and check it before it goes near a
+live boiler.** This tool writes the file offline, with no way to ask Studio
+5000 or a real controller "is this still valid" — the only real check is
+opening it there. If Studio 5000 rejects the file or a value doesn't match
+what you typed, treat that as a bug in this tool, not something to work around
+by hand-patching the file.
+
+Two write paths, two very different risk levels:
+
+* **`.L5K` (text)** is a direct text edit — the new number is spliced into the
+  exact character span the old one occupied, and nothing else in the file
+  moves. Low risk; easy to eyeball in a diff if you want to double-check.
+
+* **`.ACD` (binary)** is a real binary patch: the specific float32 bytes for
+  each edited value are overwritten in the decompressed tag database, the
+  database is re-compressed, and the file's internal directory (which stream
+  starts where) is rebuilt around the new size. See **How the ACD write-back
+  works** below for why this is safe *by construction* rather than by luck —
+  but it's still a binary rewrite of a proprietary format, so verify the
+  output.
+
+## What's been tested
+
+Every write path below was driven through an actual headless-browser run of
+this exact HTML file — not just the underlying functions in isolation — and
+the result was independently checked with the read-only Python reader in
+`fuel curve reader acd wt/acd_reader.py`, which shares no code with the writer:
+
+* **Water-tube `.ACD` write, single value** — one curve point edited,
+  re-read, exactly that value changed, everything else byte-identical
+  (including flags, point count, O2/fresh-air column gating).
+* **Water-tube `.ACD` write, multiple values across both fuels** — same
+  result, with the edited values' full float32 precision (e.g. `33.25`)
+  confirmed intact, not truncated to the table's 1-decimal display.
+* **`.L5K` write** — a curve point edited, the resulting text diffed
+  line-for-line against the original: exactly one literal changed
+  (`21.1` → `99.75`), whitespace and formatting elsewhere untouched.
+* **No-op write** (nothing edited) reports "No changes to write." and writes
+  nothing.
+* **Invalid input** (a non-numeric value in an edited cell) aborts the whole
+  write with no file produced — never a partially-written file.
+* **Cancel** reverts every field to its original value with no write.
+
+**Not tested — no firetube `.ACD` sample was available while building this**
+(the uploaded sample expired mid-session). The firetube write path patches
+both copies of the "double curve" signature `_decode_array` relies on (see
+`fuel curve reader acd wt/acd_reader.py`) — the offsets are computed the same
+way the already-validated *read* path locates them, just written to instead of
+read from, so the mechanism is the same one already proven correct on real
+firetube files. But it has not itself been round-tripped through a real
+firetube `.ACD`. Treat a firetube `_updated.ACD` with extra care until that's
+been done, and see it open correctly in Studio 5000 before relying on it.
+
+## How the ACD write-back works
+
+An `.ACD` is a flat set of named streams (`Comps.Dat`, `TagInfo.XML`, …) laid
+end-to-end, indexed by a trailing table of
+`[name][compressed length][file offset]` — each stream's offset is just the
+running total of every prior stream's length. Editing a curve value means:
+
+1. Decompress `Comps.Dat` (gzip) once, on load.
+2. Locate each cell's value the same way the reader already does, but also
+   record the **byte offset** of that value inside the decompressed buffer
+   (for firetube, both copies of the value — see below).
+3. On Write Curve, patch only the edited offsets directly, in place.
+4. Re-compress `Comps.Dat`. It won't be the same number of bytes as before —
+   that's fine and expected; gzip's compressed size isn't a fixed target,
+   only the decompressed content matters, and this **needs no output-file
+   opener to be forgiving about anything** — a standard gzip encoder
+   producing a standard gzip stream is unconditionally something the file's
+   own decompressor (also standard gzip) can read.
+5. Rebuild the trailing index table with every stream's offset recomputed
+   from the new total. Every *other* stream's bytes are carried through
+   completely untouched — nothing about them is re-interpreted or
+   re-encoded, only where they sit in the file changes.
+
+This was validated with a round-trip test before any editing code was
+written: decompress `Comps.Dat`, recompress it unchanged (forcing a different
+compressed length), rebuild the container, and confirm the independent Python
+reader gets byte-identical output from the rebuilt file. It did — so the
+container rebuild mechanics are sound independent of what value is actually
+being changed.
+
+**Firetube** curves are stored twice in the file — the same 16-float array
+sits at one offset and again 64 bytes later (`FuelAirCurveData.Ref_Data` plus
+a working copy); the read path (`_decode_array`) treats the two copies
+matching as its signature for "this is really a curve." An edit therefore
+writes the new value to *both* offsets, or that signature breaks and the next
+read of the file would silently miss the column.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `Curve Editor.html` | No-install reader + editor. `.ACD` + `.L5K`, firetube + water-tube. |
+
+For the read-only version and the full breakdown of the tag formats
+themselves (which tags, which offsets, why), see
+`fuel curve reader acd wt/README.md` and `curve script - acd/README.md` — this
+tool's reading logic is unchanged from those.
