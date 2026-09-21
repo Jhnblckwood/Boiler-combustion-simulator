@@ -77,6 +77,11 @@ the result was independently checked with the read-only Python reader in
   else byte-identical. Confirmed directly that *both* copies of the "double
   curve" signature were patched (not just one, which would otherwise silently
   break that column on the next read).
+* **O2 column edit** — the O2 column shows whenever a stored O2 curve has real
+  values, even with trim disabled in config, so those values can be edited
+  like any other. Two O2 points edited across both fuels came back exact, with
+  the trim enable flag itself untouched. (O2 purge and light-off stay blank
+  and non-editable, as they always have.)
 * **Firetube `.ACD` write on an older Studio 5000 version (V20)** — the same
   project saved as V20 rather than V31: a different tag-name offset, a
   different record count, and four fewer streams in the container. Three

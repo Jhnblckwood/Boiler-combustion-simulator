@@ -108,10 +108,13 @@ tries a list of aliases.
 Each fuel trims off **its own** characterizer — `OxygenTrimCharacterizer_Gas_Y`
 for gas, `OxygenTrimCharacterizer_Oil_Y` for #2 oil.
 
-Whether the column appears is decided by **`OxygenTrimInStandby`**, which is
-**inverted** — `0` = trim enabled, `1` = trim in standby (disabled). The footer
-just says `O2 trim enabled.` or `O2 trim disabled.` without naming the tag; run
-`--tags` if you need to see which tag drove it.
+Whether trim is actually *running* comes from **`OxygenTrimInStandby`**, which
+is **inverted** — `0` = trim enabled, `1` = trim in standby (disabled). The
+footer just says `O2 trim enabled.` or `O2 trim disabled.` without naming the
+tag; run `--tags` if you need to see which tag drove it.
+
+That flag doesn't decide whether the **column** appears — see
+[O2 column visibility](#o2-column-visibility) below.
 
 > The two fuels having identical O2 numbers is normal in an uncommissioned
 > file; they're read from separate tags, so real differences do show up.
@@ -169,8 +172,22 @@ In the L5K backing-tag layout the curve is the first 16-element array, with
 
 * Values rounded to **one decimal place**; zero/missing shows as `0`.
 * **Fuel Act1** — purge cell left blank.
-* **O2** — purge and LtOff left blank; the O2 column only appears for a fuel
-  that actually has O2-trim data.
+* **O2** — purge and LtOff left blank.
+
+### O2 column visibility
+
+The O2 column appears whenever **either fuel has a stored O2 curve with real
+values** — regardless of whether trim is switched on.
+
+That distinction matters: a commissioned O2 curve can be sitting in the file
+with trim disabled in config (`RH150_14` and `RH150_14a` are exactly that —
+real per-fuel curves, `DesiredO2.Cfg.O2Curve = 0`). Those values are worth
+seeing and editing, so the column follows the data. Whether trim is actually
+running is reported separately in the note under the table, which is the only
+thing the enable flag drives.
+
+A file with no O2 curve at all (`bb1000_2`, either version) still shows no O2
+column — there's nothing to show.
 
 ### Fuel names
 

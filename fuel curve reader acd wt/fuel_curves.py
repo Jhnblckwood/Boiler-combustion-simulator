@@ -107,6 +107,18 @@ class MultiFuelData:
             return ROW_LABELS
         return ["purge", "LtOff"] + [str(n) for n in range(1, self.point_count + 1)]
 
+    @property
+    def show_o2(self) -> bool:
+        """Whether to show the O2 column — driven by stored data, not the flag.
+
+        A boiler can have a commissioned O2 curve sitting in the file while
+        trim is switched off in config. Those values are real and worth
+        seeing (and editing), so the column follows the data; whether trim is
+        actually running is reported separately in the notes.
+        """
+        return any(f.columns[O2_COLUMN].has_data
+                   for f in self.fuels if O2_COLUMN in f.columns)
+
 
 def _nonzero(raw) -> bool:
     try:
@@ -243,10 +255,13 @@ def extract_multifuel_l5k(path: str) -> MultiFuelData:
         "Fuel 1 = " + data.fuels[0].name + ", Fuel 2 = " + data.fuels[1].name
         + "  (from the file's fuel-selection config)."
     )
-    if data.o2_trim_enabled:
-        data.notes.append("O2 trim is enabled (DesiredO2.Cfg.O2Curve = 1) — O2 column shown.")
-    else:
-        data.notes.append("O2 trim is disabled (DesiredO2.Cfg.O2Curve = 0) — O2 column omitted.")
+    # The note reports whether trim is actually running; the column itself
+    # follows the stored data, so a disabled boiler with a commissioned curve
+    # still shows it.
+    data.notes.append(
+        "O2 trim is %s (DesiredO2.Cfg.O2Curve = %d)."
+        % ("enabled" if data.o2_trim_enabled else "disabled",
+           1 if data.o2_trim_enabled else 0))
     return data
 
 
@@ -254,12 +269,12 @@ def extract_multifuel_l5k(path: str) -> MultiFuelData:
 # Table building
 # ---------------------------------------------------------------------------
 
-def build_fuel_table(fuel: FuelCurves, o2_enabled: bool = False,
+def build_fuel_table(fuel: FuelCurves, show_o2: bool = False,
                      column_order=None, row_labels=None) -> dict:
     """Build a table model for one fuel.
 
     Rows: purge, LtOff, then one row per curve point.  Columns default to the
-    firetube set (Air, Fuel Act1, FGR, VFD) plus O2 when O2 trim is enabled;
+    firetube set (Air, Fuel Act1, FGR, VFD) plus O2 when ``show_o2``;
     ``column_order`` overrides that for water-tube programs.
 
     Blank cells (per spec):
@@ -268,7 +283,7 @@ def build_fuel_table(fuel: FuelCurves, o2_enabled: bool = False,
     """
     order = column_order or CANONICAL_COLUMNS
     columns = [c for c in order if c != O2_COLUMN]
-    if o2_enabled and O2_COLUMN in order:
+    if show_o2 and O2_COLUMN in order:
         columns.append(O2_COLUMN)
 
     rows = []
@@ -314,7 +329,7 @@ def build_combined_table(data: MultiFuelData) -> dict:
     its purge / LtOff / 1..16 rows.
     """
     order, labels = data.columns, data.row_labels
-    per_fuel = [(f, build_fuel_table(f, data.o2_trim_enabled, order, labels))
+    per_fuel = [(f, build_fuel_table(f, data.show_o2, order, labels))
                 for f in data.fuels]
     present = set()
     for _f, t in per_fuel:
@@ -348,7 +363,7 @@ def build_combined_table(data: MultiFuelData) -> dict:
 def render_fuel_tables_text(data: MultiFuelData) -> str:
     out = []
     for fuel in data.fuels:
-        table = build_fuel_table(fuel, data.o2_trim_enabled,
+        table = build_fuel_table(fuel, data.show_o2,
                                  data.columns, data.row_labels)
         out.append(f"Fuel {fuel.number} — {fuel.name}")
         out.append(_render_one(table))

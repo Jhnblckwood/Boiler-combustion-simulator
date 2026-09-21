@@ -208,13 +208,24 @@ function cell(col, label, cc){
   return fmt((i>=0 && i<cc.curve.length) ? cc.curve[i] : null);
 }
 
+/* Whether to show the O2 column — driven by stored data, not the enable flag.
+   A boiler can have a commissioned O2 curve sitting in the file while trim is
+   switched off in config. Those values are real and worth seeing, so the
+   column follows the data; whether trim is running is reported in the notes. */
+function o2HasData(data){
+  return data.fuels.some(f => {
+    const cc = f.cols["O2"];
+    return cc && cc.found && cc.curve.some(v => Math.abs(parseFloat(v) || 0) > 1e-6);
+  });
+}
+
 /* ---- rendering -------------------------------------------------------- */
 function render(data, filename){
   // Firetube files use the default column set and 16 points; water-tube files
   // supply their own (Air / Fuel / FGR / Fresh Air / O2, 11 points).
   const base = data.columnOrder || ["Air","Fuel Act1","FGR","VFD","O2"];
   const columns = base.filter(c => c!=="O2");
-  if(data.o2en && base.indexOf("O2")>=0) columns.push("O2");
+  if(o2HasData(data) && base.indexOf("O2")>=0) columns.push("O2");
   const ROWS = data.rowLabels || ROW_LABELS;
 
   const wrap = document.getElementById("tables");
@@ -246,9 +257,10 @@ function render(data, filename){
   document.getElementById("status").textContent =
     filename + (data.controller ? "  •  controller: " + data.controller : "") + "  •  both fuels";
 
+  // Reports whether trim actually runs; the column itself follows the data.
   const o2note = data.o2note || (data.o2en
-    ? "O2 trim is enabled (DesiredO2.Cfg.O2Curve = 1) — O2 column shown."
-    : "O2 trim is disabled (DesiredO2.Cfg.O2Curve = 0) — O2 column omitted.");
+    ? "O2 trim is enabled (DesiredO2.Cfg.O2Curve = 1)."
+    : "O2 trim is disabled (DesiredO2.Cfg.O2Curve = 0).");
   document.getElementById("notes").className = "notes";
   document.getElementById("notes").innerHTML = "• " + o2note;
 }
